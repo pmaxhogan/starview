@@ -1,0 +1,15 @@
+[package]
+name = "starview"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+hidapi = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls", "gzip"], default-features = false }
+# default-features = false drops wgpu; glow is required for transparency on Windows
+eframe = { version = "0.34.3", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+raw-window-handle = "0.6"
+windows = { version = "0.62.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }

@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod geometry;
 mod hid;
+mod keycodes;
 mod oryx;
 mod overlay;
 
@@ -8,6 +10,30 @@ use eframe::egui;
 
 const DEFAULT_LAYOUT: &str = "jmvGw";
 const DEFAULT_GEOMETRY: &str = "moonlander";
+
+/// egui's default fonts have no plain-arrow glyphs (←↑→↓) and miss most of
+/// the symbols people put in Oryx custom labels. Append Windows' Segoe UI
+/// Symbol as a fallback so those render instead of tofu.
+fn install_symbol_font(ctx: &egui::Context) {
+    let path = r"C:\Windows\Fonts\seguisym.ttf";
+    let Ok(bytes) = std::fs::read(path) else {
+        eprintln!("symbol font not found at {path}; arrows may not render");
+        return;
+    };
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "segoe-ui-symbol".to_owned(),
+        std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+    );
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        fonts
+            .families
+            .entry(family)
+            .or_default()
+            .push("segoe-ui-symbol".to_owned());
+    }
+    ctx.set_fonts(fonts);
+}
 
 fn main() -> eframe::Result {
     // Usage: starview [layout-hash-id] [geometry]
@@ -48,6 +74,7 @@ fn main() -> eframe::Result {
         "starview",
         options,
         Box::new(|cc| {
+            install_symbol_font(&cc.egui_ctx);
             let (tx, rx) = std::sync::mpsc::channel();
             let ctx = cc.egui_ctx.clone();
             hid::spawn_watcher(move |event| {

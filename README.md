@@ -1,9 +1,9 @@
 # starview
 
 A tiny Windows overlay that shows which layer your ZSA keyboard is on — but only
-when you're *not* on the base layer. A semi-transparent bubble appears in the
-top-right corner of the screen naming the active layer, and disappears when you
-return to base.
+when you're *not* on the base layer. A semi-transparent panel appears in the
+top-right corner rendering the active layer's full keymap (keycaps, labels,
+hold-action hints), and disappears when you return to base.
 
 The overlay is a ghost: clicks pass straight through it, it never appears in
 Alt-Tab or on the taskbar, and it never steals focus.
@@ -39,9 +39,18 @@ layer regardless of what the keyboard reports.
   other running. The keyboard's paired flag lives in its RAM, so the watcher
   re-pairs after reconnects and periodically when idle (idempotent, doubles as
   a resync).
-- **Layer names** (`src/oryx.rs`): one GraphQL query against the unofficial
-  `https://oryx.zsa.io/graphql` endpoint (`layout(hashId, revisionId:
-  "latest") { revision { layers { title position } } }`).
+- **Layer names + key data** (`src/oryx.rs`): one GraphQL query against the
+  unofficial `https://oryx.zsa.io/graphql` endpoint (`layout(hashId,
+  revisionId: "latest") { revision { layers { title position keys } } }`),
+  parsed leniently because the stored key JSON has drifted over the years.
+- **Keymap render** (`src/geometry.rs`, `src/keycodes.rs`, `src/overlay.rs`):
+  key positions are transcribed from QMK's `moonlander/keyboard.json` with
+  Oryx's ±30° thumb-cluster rotation, indexed in Oryx key order (left half
+  0–35, right 36–71; rows top-to-bottom, then big-red, then piano keys —
+  validated against a live layout). Labels compose from Oryx custom labels,
+  a ~390-entry QMK keycode table, layer-switch targets ("MO 2"), and
+  modifier wrappers ("G+1", "C+Bksp"). Windows' Segoe UI Symbol is loaded as
+  a font fallback so arrows and symbol labels render.
 - **Overlay window** (`src/overlay.rs`): eframe/egui with the **glow** renderer
   (wgpu, the eframe default, cannot do transparent windows on Windows). The
   ghost behavior is raw Win32: `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW |
@@ -53,5 +62,7 @@ layer regardless of what the keyboard reports.
 
 ## Roadmap
 
-- v2: render the actual keymap of the active layer (the Oryx GraphQL `keys`
-  field has per-key data; needs a Moonlander geometry table for placement).
+- Other ZSA boards (Voyager, Ergodox EZ): needs their geometry tables; the
+  rest of the pipeline is board-agnostic (the renderer falls back to the
+  name-only bubble when the key count doesn't match the geometry).
+- Macro contents and underglow-color swatches on rendered keys.

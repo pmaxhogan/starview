@@ -127,7 +127,7 @@ impl eframe::App for OverlayApp {
                     // Ease toward this motion window's direction instead of
                     // adding raw deltas — individual ~25ms windows are noisy
                     // and made the dot jitter during momentum spins.
-                    let mut target = vec2(dx as f32, dy as f32) * 0.015;
+                    let mut target = vec2(dx as f32, dy as f32) * 0.03;
                     let len = target.length();
                     if len > 1.0 {
                         target /= len;
@@ -356,7 +356,10 @@ fn draw_board(
             egui::Stroke::new(1.2, Color32::from_rgba_unmultiplied(255, 255, 255, 60)),
         );
         let activity = ball.length().min(1.0);
-        let dot = center + ball * (radius * 0.55);
+        // Soft response curve: moderate rolls already swing well out, full
+        // speed brings the dot's edge to the ring.
+        let deflection = activity.powf(0.6) * radius * 0.68;
+        let dot = center + if activity > 0.0 { ball / ball.length() } else { ball } * deflection;
         let alpha = (70.0 + 185.0 * activity) as u8;
         painter.circle_filled(
             dot,

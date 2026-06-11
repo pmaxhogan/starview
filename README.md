@@ -1,4 +1,9 @@
 # starview
+## Warning
+> [!CAUTION]
+> This project is vibecoded and not very well tested. It Works On My Machine but proceed with caution
+
+---
 
 A tiny Windows overlay that shows which layer your ZSA keyboard is on — but only
 when you're *not* on the base layer. A semi-transparent panel appears in the

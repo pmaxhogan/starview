@@ -49,6 +49,12 @@ fn run(
     menu.append(&corner_menu)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&quit)?;
+    // Generous bottom padding: auto-hiding taskbars pop up OVER the bottom of
+    // the menu, so inert blank rows take the hit instead of the real items.
+    menu.append(&PredefinedMenuItem::separator())?;
+    for _ in 0..3 {
+        menu.append(&MenuItem::new("", false, None))?;
+    }
 
     // Must stay alive for the icon to remain in the tray.
     let _tray = TrayIconBuilder::new()

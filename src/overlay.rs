@@ -22,6 +22,8 @@ pub enum AppEvent {
     Hid(HidEvent),
     /// Refreshed layout from the periodic Oryx re-fetch.
     Layout(LayoutInfo),
+    /// Coalesced relative motion from the ZSA trackball (Navigator).
+    Trackball(i32, i32),
 }
 
 pub const OVERLAY_W: f32 = 480.0;
@@ -41,6 +43,10 @@ pub struct OverlayApp {
     layer: u8,
     /// Oryx key indices currently held down on the physical board.
     pressed: HashSet<usize>,
+    /// Smoothed trackball motion vector (unit-clamped); decays toward zero.
+    ball: egui::Vec2,
+    /// Whether a ZSA pointing device has ever produced motion.
+    ball_seen: bool,
     connected: bool,
     positioned: bool,
     shown: bool,
@@ -57,6 +63,8 @@ impl OverlayApp {
             layout,
             layer: 0,
             pressed: HashSet::new(),
+            ball: egui::Vec2::ZERO,
+            ball_seen: false,
             connected: false,
             positioned: false,
             shown: false,
@@ -111,7 +119,21 @@ impl eframe::App for OverlayApp {
                     self.pressed.clear();
                 }
                 AppEvent::Layout(info) => self.layout = Some(info),
+                AppEvent::Trackball(dx, dy) => {
+                    self.ball_seen = true;
+                    let v = self.ball + vec2(dx as f32, dy as f32) * 0.02;
+                    let len = v.length();
+                    self.ball = if len > 1.0 { v / len } else { v };
+                }
             }
+        }
+
+        // Let the trackball dot glide back to center after motion stops.
+        if self.ball.length() > 0.02 {
+            self.ball *= 0.80;
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
+        } else {
+            self.ball = egui::Vec2::ZERO;
         }
 
         // Pin to the top-right corner once the monitor size is known.
@@ -166,8 +188,12 @@ impl eframe::App for OverlayApp {
             .flatten()
             .filter(|b| b.len() == geometry::MOONLANDER_KEYS.len());
 
+        // Show the trackball widget once a ZSA pointing device has moved
+        // (forced mode always shows it, for screenshots).
+        let ball = (self.ball_seen || self.force_layer.is_some()).then_some(self.ball);
+
         if !keys.is_empty() && keys.len() == geometry::MOONLANDER_KEYS.len() {
-            draw_board(ui, &title, keys, base, &self.pressed);
+            draw_board(ui, &title, keys, base, &self.pressed, ball);
         } else {
             draw_name_bubble(ui, &title);
         }
@@ -191,6 +217,7 @@ fn draw_board(
     keys: &[oryx::Key],
     base: Option<&[oryx::Key]>,
     pressed: &HashSet<usize>,
+    ball: Option<egui::Vec2>,
 ) {
     let pad = 12.0;
     let header_h = 24.0;
@@ -298,6 +325,27 @@ fn draw_board(
             let pos = anchor - rotate(vec2(galley.size().x / 2.0, galley.size().y));
             key_painter.add(TextShape::new(pos, galley, Color32::WHITE).with_angle(angle));
         }
+    }
+
+    // Trackball indicator: a ring in the center gap between the thumb
+    // clusters; the dot deflects in the direction of motion and brightens
+    // while the ball is moving, then glides back to center.
+    if let Some(ball) = ball {
+        let center = origin + vec2(8.5, 5.2) * BOARD_SCALE;
+        let radius = 0.65 * BOARD_SCALE;
+        painter.circle_stroke(
+            center,
+            radius,
+            egui::Stroke::new(1.2, Color32::from_rgba_unmultiplied(255, 255, 255, 60)),
+        );
+        let activity = ball.length().min(1.0);
+        let dot = center + ball * (radius * 0.55);
+        let alpha = (70.0 + 185.0 * activity) as u8;
+        painter.circle_filled(
+            dot,
+            radius * 0.30,
+            Color32::from_rgba_unmultiplied(110, 165, 255, alpha),
+        );
     }
 }
 

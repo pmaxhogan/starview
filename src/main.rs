@@ -5,6 +5,8 @@ mod hid;
 mod keycodes;
 mod oryx;
 mod overlay;
+#[cfg(windows)]
+mod trackball;
 
 use eframe::egui;
 
@@ -89,6 +91,16 @@ fn main() -> eframe::Result {
                 let _ = hid_tx.send(overlay::AppEvent::Hid(event));
                 ctx.request_repaint();
             });
+
+            #[cfg(windows)]
+            {
+                let ctx = cc.egui_ctx.clone();
+                let ball_tx = tx.clone();
+                trackball::spawn_listener(move |dx, dy| {
+                    let _ = ball_tx.send(overlay::AppEvent::Trackball(dx, dy));
+                    ctx.request_repaint();
+                });
+            }
 
             // Periodic Oryx re-fetch so layout edits show up without a restart.
             let ctx = cc.egui_ctx.clone();

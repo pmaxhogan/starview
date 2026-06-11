@@ -61,6 +61,12 @@ layer regardless of what the keyboard reports.
   drawn as actually-rotated polygons with rotated labels. Keydown/keyup HID
   events (matrix positions, mapped through the same keyboard.json table)
   highlight physically held keys while the overlay is visible.
+- **Trackball indicator** (`src/trackball.rs`): the ZSA Navigator presents as
+  a HID mouse on the keyboard's USB composite device, so a Raw Input
+  message-only window (`RIDEV_INPUTSINK`) watches per-device mouse deltas,
+  filtered to ZSA's vendor id (other mice are ignored). A ring between the
+  thumb clusters shows a dot that deflects with ball motion and glides back
+  to center; it appears after the first motion from a ZSA pointing device.
 - **Overlay window** (`src/overlay.rs`): eframe/egui with the **glow** renderer
   (wgpu, the eframe default, cannot do transparent windows on Windows). The
   ghost behavior is raw Win32: `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW |

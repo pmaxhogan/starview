@@ -10,6 +10,19 @@ edits in the configurator show up without restarting.
 The overlay is a ghost: clicks pass straight through it, it never appears in
 Alt-Tab or on the taskbar, and it never steals focus.
 
+## Install
+
+Grab `starview-setup.exe` from the
+[latest release](https://github.com/pmaxhogan/starview/releases/latest) and
+run it — per-user install (no admin), with an optional start-with-Windows
+task. The app then checks for new releases daily and offers updates via the
+tray menu ("Install update vX.Y.Z"), installing silently and relaunching
+itself. Or build from source: `cargo build --release`.
+
+Releases are built by the `release` GitHub Actions workflow on `v*` tags
+(tag must match `Cargo.toml`'s version); each release carries the installer,
+a portable exe, and SHA256SUMS.
+
 ## Usage
 
 ```
@@ -30,9 +43,9 @@ The layout must be public in Oryx. Layer names are fetched once at startup and
 cached in `%LOCALAPPDATA%\starview`, so it works offline after the first run.
 If the fetch fails entirely, the overlay falls back to layer numbers.
 
-To start it with Windows: `Win+R` → `shell:startup` → drop in a shortcut to
-`target\release\starview.exe` (build with `cargo build --release`; the release
-build has no console window).
+The installer's "Start starview when Windows starts" task handles autostart
+(an HKCU Run registry entry). For source builds: `Win+R` → `shell:startup` →
+drop in a shortcut to `target\release\starview.exe`.
 
 For testing/styling, set `STARVIEW_FORCE_LAYER=<n>` to pin the overlay to a
 layer regardless of what the keyboard reports.

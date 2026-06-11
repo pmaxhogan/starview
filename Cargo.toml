@@ -1,7 +1,13 @@
 [package]
 name = "starview"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
+license = "MIT"
+repository = "https://github.com/pmaxhogan/starview"
+description = "Layer overlay for ZSA keyboards: shows the active layer's keymap in a screen corner"
+
+[build-dependencies]
+winresource = "0.1"
 
 [dependencies]
 anyhow = "1"
@@ -12,5 +18,5 @@ reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls", "gzi
 # default-features = false drops wgpu; glow is required for transparency on Windows
 eframe = { version = "0.34.3", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
 raw-window-handle = "0.6"
-windows = { version = "0.62.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_UI_Input", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi"] }
+windows = { version = "0.62.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_UI_Input", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_System_Threading"] }
 tray-icon = "0.24.1"

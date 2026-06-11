@@ -10,6 +10,8 @@ mod settings;
 mod trackball;
 #[cfg(windows)]
 mod tray;
+#[cfg(windows)]
+mod updater;
 
 use eframe::egui;
 
@@ -116,6 +118,8 @@ fn main() -> eframe::Result {
                     });
                     ctx.request_repaint();
                 });
+
+                updater::spawn_checker(tray::notify_update);
             }
 
             // Periodic Oryx re-fetch so layout edits show up without a restart.

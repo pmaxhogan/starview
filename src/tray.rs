@@ -5,17 +5,43 @@
 //! event channel right after each dispatched message — still on this thread,
 //! with full access to the items for check-mark updates.
 
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIconBuilder};
+use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, MSG, TranslateMessage,
+    DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, TranslateMessage, WM_APP,
 };
 
 use crate::settings::{self, Corner, Settings};
+use crate::updater;
 
 pub enum TrayEvent {
     Settings(Settings),
     Quit,
+}
+
+static TRAY_THREAD: AtomicU32 = AtomicU32::new(0);
+static PENDING_UPDATE: Mutex<Option<String>> = Mutex::new(None);
+
+/// Tells the tray (from any thread) that an update is downloaded and ready;
+/// the menu's update item lights up.
+pub fn notify_update(version: &str) {
+    *PENDING_UPDATE.lock().unwrap() = Some(version.to_owned());
+    let tid = TRAY_THREAD.load(Ordering::Relaxed);
+    if tid != 0 {
+        // Wake the message pump so it notices.
+        unsafe {
+            let _ = PostThreadMessageW(
+                tid,
+                WM_APP,
+                windows::Win32::Foundation::WPARAM(0),
+                windows::Win32::Foundation::LPARAM(0),
+            );
+        }
+    }
 }
 
 pub fn spawn(initial: Settings, mut on_event: impl FnMut(TrayEvent) + Send + 'static) {
@@ -42,12 +68,14 @@ fn run(
     for (_, item) in &corner_items {
         corner_menu.append(item)?;
     }
+    let update = MenuItem::new("Up to date", false, None);
     let quit = MenuItem::new("Quit starview", true, None);
 
     let menu = Menu::new();
     menu.append(&pin)?;
     menu.append(&corner_menu)?;
     menu.append(&PredefinedMenuItem::separator())?;
+    menu.append(&update)?;
     menu.append(&quit)?;
     // Generous bottom padding: auto-hiding taskbars pop up OVER the bottom of
     // the menu, so inert blank rows take the hit instead of the real items.
@@ -63,12 +91,21 @@ fn run(
         .with_menu(Box::new(menu))
         .build()?;
 
+    TRAY_THREAD.store(unsafe { GetCurrentThreadId() }, Ordering::Relaxed);
+
     let mut state = initial;
     let mut msg = MSG::default();
     unsafe {
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
+            // The update checker wakes us with WM_APP once a new version is
+            // downloaded; light up the install item (we're on the tray thread
+            // here, so touching the menu items is fine).
+            if let Some(version) = PENDING_UPDATE.lock().unwrap().take() {
+                update.set_text(format!("Install update v{version}"));
+                update.set_enabled(true);
+            }
             // Menu clicks were queued by the dispatch above.
             while let Ok(event) = MenuEvent::receiver().try_recv() {
                 if *event.id() == pin.id() {
@@ -76,6 +113,12 @@ fn run(
                     state.pin_base = pin.is_checked();
                 } else if *event.id() == quit.id() {
                     on_event(TrayEvent::Quit);
+                    continue;
+                } else if *event.id() == update.id() {
+                    if updater::install_ready_update() {
+                        // The installer stops us, swaps the exe, relaunches.
+                        on_event(TrayEvent::Quit);
+                    }
                     continue;
                 } else if let Some((corner, _)) =
                     corner_items.iter().find(|(_, item)| *event.id() == item.id())

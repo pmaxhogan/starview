@@ -59,11 +59,12 @@ layer regardless of what the keyboard reports.
 - **Overlay window** (`src/overlay.rs`): eframe/egui with the **glow** renderer
   (wgpu, the eframe default, cannot do transparent windows on Windows). The
   ghost behavior is raw Win32: `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW |
-  WS_EX_LAYERED | WS_EX_TRANSPARENT` with `WS_EX_APPWINDOW` cleared, and
-  show/hide via `ShowWindow(SW_SHOWNA/SW_HIDE)`. winit can't express these and
-  rewrites the ex-styles wholesale on its own state changes (and re-shows the
-  window after the first frame), so both the styles and the visibility are
-  re-asserted on every update tick rather than set once.
+  WS_EX_LAYERED | WS_EX_TRANSPARENT` with `WS_EX_APPWINDOW` cleared. winit
+  can't express these and rewrites the ex-styles wholesale on its own state
+  changes, so they're re-asserted on every update tick rather than set once.
+  The window itself stays permanently visible; "hidden" just means nothing is
+  drawn (a truly hidden window stops presenting, so its stale last frame
+  would flash on re-show).
 
 ## Roadmap
 

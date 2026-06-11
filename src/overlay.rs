@@ -124,16 +124,15 @@ impl eframe::App for OverlayApp {
             self.layer = forced;
             self.connected = true;
         }
-        // Forced mode always shows (lets layer 0 be previewed/screenshotted).
+        // The window stays permanently visible (it's transparent and
+        // click-through); "hiding" means drawing nothing. A raw-hidden window
+        // stops presenting, so its swapchain kept the previous layer's frame
+        // and flashed it on re-show — content-level hiding swaps in a single
+        // frame instead. Forced mode also shows layer 0 for screenshots.
         self.shown = self.force_layer.is_some() || (self.connected && self.layer != 0);
-        // Re-asserted every tick rather than on transitions: eframe/winit
-        // re-show the window on their own (e.g. the deferred first-frame show),
-        // so a one-shot hide can be silently undone.
-        #[cfg(windows)]
-        win32::sync_overlay_visible(frame, self.shown);
 
-        // Low-rate heartbeat so the asserts above self-heal even when no
-        // layer events arrive (e.g. right after the startup show race).
+        // Low-rate heartbeat so the style assert above self-heals even when
+        // no HID events arrive.
         ctx.request_repaint_after(std::time::Duration::from_secs(1));
     }
 
@@ -319,9 +318,9 @@ mod win32 {
     use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
     use windows::Win32::Foundation::{COLORREF, HWND};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GWL_EXSTYLE, GetWindowLongPtrW, IsWindowVisible, LWA_ALPHA, SW_HIDE, SW_SHOWNA,
-        SetLayeredWindowAttributes, SetWindowLongPtrW, ShowWindow, WS_EX_APPWINDOW,
-        WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+        GWL_EXSTYLE, GetWindowLongPtrW, LWA_ALPHA, SetLayeredWindowAttributes,
+        SetWindowLongPtrW, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        WS_EX_TRANSPARENT,
     };
 
     fn hwnd(frame: &eframe::Frame) -> Option<HWND> {
@@ -352,16 +351,4 @@ mod win32 {
         }
     }
 
-    /// SW_SHOWNA shows without activating. Raw ShowWindow instead of
-    /// ViewportCommand::Visible because winit's set_visible can use SW_SHOW
-    /// (which activates) and triggers its ex-style rewrite. Compares against
-    /// the real window state so it converges even when winit re-shows us.
-    pub fn sync_overlay_visible(frame: &eframe::Frame, visible: bool) {
-        let Some(hwnd) = hwnd(frame) else { return };
-        unsafe {
-            if IsWindowVisible(hwnd).as_bool() != visible {
-                let _ = ShowWindow(hwnd, if visible { SW_SHOWNA } else { SW_HIDE });
-            }
-        }
-    }
 }

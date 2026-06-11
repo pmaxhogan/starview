@@ -47,6 +47,8 @@ pub struct OverlayApp {
     ball: egui::Vec2,
     /// Whether a ZSA pointing device has ever produced motion.
     ball_seen: bool,
+    /// Previous `logic` tick, for time-based (tick-rate-independent) decay.
+    last_tick: Option<std::time::Instant>,
     connected: bool,
     positioned: bool,
     shown: bool,
@@ -65,6 +67,7 @@ impl OverlayApp {
             pressed: HashSet::new(),
             ball: egui::Vec2::ZERO,
             ball_seen: false,
+            last_tick: None,
             connected: false,
             positioned: false,
             shown: false,
@@ -121,19 +124,33 @@ impl eframe::App for OverlayApp {
                 AppEvent::Layout(info) => self.layout = Some(info),
                 AppEvent::Trackball(dx, dy) => {
                     self.ball_seen = true;
-                    let v = self.ball + vec2(dx as f32, dy as f32) * 0.02;
-                    let len = v.length();
-                    self.ball = if len > 1.0 { v / len } else { v };
+                    // Ease toward this motion window's direction instead of
+                    // adding raw deltas — individual ~25ms windows are noisy
+                    // and made the dot jitter during momentum spins.
+                    let mut target = vec2(dx as f32, dy as f32) * 0.015;
+                    let len = target.length();
+                    if len > 1.0 {
+                        target /= len;
+                    }
+                    self.ball += (target - self.ball) * 0.4;
                 }
             }
         }
 
-        // Let the trackball dot glide back to center after motion stops.
-        if self.ball.length() > 0.02 {
-            self.ball *= 0.80;
-            ctx.request_repaint_after(std::time::Duration::from_millis(30));
-        } else {
-            self.ball = egui::Vec2::ZERO;
+        // Glide the trackball dot back to center: time-based half-life so the
+        // decay is identical whether the UI ticks at 1 Hz (idle) or ~40 Hz
+        // (during motion) — per-tick decay fought the event stream and
+        // jittered.
+        let now = std::time::Instant::now();
+        let dt = self.last_tick.map_or(0.0, |t| (now - t).as_secs_f32());
+        self.last_tick = Some(now);
+        if self.ball != egui::Vec2::ZERO {
+            self.ball *= 0.5f32.powf(dt / 0.12);
+            if self.ball.length() > 0.02 {
+                ctx.request_repaint_after(std::time::Duration::from_millis(30));
+            } else {
+                self.ball = egui::Vec2::ZERO;
+            }
         }
 
         // Pin to the top-right corner once the monitor size is known.

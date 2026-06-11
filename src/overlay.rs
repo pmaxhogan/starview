@@ -15,6 +15,7 @@ use egui::{Align2, Color32, CornerRadius, FontId, Rect, pos2, vec2};
 
 use crate::hid::HidEvent;
 use crate::oryx::{self, LayoutInfo};
+use crate::settings::{Corner, Settings};
 use crate::{geometry, keycodes};
 
 /// Everything the background threads feed into the UI.
@@ -24,6 +25,10 @@ pub enum AppEvent {
     Layout(LayoutInfo),
     /// Coalesced relative motion from the ZSA trackball (Navigator).
     Trackball(i32, i32),
+    /// Settings changed from the tray menu.
+    Settings(Settings),
+    /// Quit chosen from the tray menu.
+    Quit,
 }
 
 pub const OVERLAY_W: f32 = 480.0;
@@ -52,14 +57,15 @@ pub struct OverlayApp {
     connected: bool,
     positioned: bool,
     shown: bool,
-    /// --always: keep the overlay up on the base layer too.
+    /// Keep the overlay up on the base layer too (tray toggle / --always).
     always: bool,
+    corner: Corner,
     /// Test override (STARVIEW_FORCE_LAYER): pretend this layer is active.
     force_layer: Option<u8>,
 }
 
 impl OverlayApp {
-    pub fn new(events: Receiver<AppEvent>, layout: Option<LayoutInfo>, always: bool) -> Self {
+    pub fn new(events: Receiver<AppEvent>, layout: Option<LayoutInfo>, settings: Settings) -> Self {
         Self {
             events,
             layout,
@@ -71,20 +77,22 @@ impl OverlayApp {
             connected: false,
             positioned: false,
             shown: false,
-            always,
+            always: settings.pin_base,
+            corner: settings.corner,
             force_layer: std::env::var("STARVIEW_FORCE_LAYER")
                 .ok()
                 .and_then(|v| v.parse().ok()),
         }
     }
 
+    /// Header text: layer number + name, like the Oryx configurator.
     fn label(&self) -> String {
         match self
             .layout
             .as_ref()
             .and_then(|l| l.layer_name(self.layer as usize))
         {
-            Some(name) => name.to_owned(),
+            Some(name) => format!("{}: {}", self.layer, name),
             None => format!("Layer {}", self.layer),
         }
     }
@@ -122,6 +130,14 @@ impl eframe::App for OverlayApp {
                     self.pressed.clear();
                 }
                 AppEvent::Layout(info) => self.layout = Some(info),
+                AppEvent::Settings(s) => {
+                    self.always = s.pin_base;
+                    if self.corner != s.corner {
+                        self.corner = s.corner;
+                        self.positioned = false; // re-anchor on next tick
+                    }
+                }
+                AppEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                 AppEvent::Trackball(dx, dy) => {
                     self.ball_seen = true;
                     // Ease toward this motion window's direction instead of
@@ -153,12 +169,14 @@ impl eframe::App for OverlayApp {
             }
         }
 
-        // Pin to the top-right corner once the monitor size is known.
+        // Pin to the configured corner once the monitor size is known.
         if !self.positioned
             && let Some(size) = ctx.input(|i| i.viewport().monitor_size)
         {
-            let pos = egui::pos2(size.x - OVERLAY_W - SCREEN_MARGIN, SCREEN_MARGIN);
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(corner_pos(
+                self.corner,
+                size,
+            )));
             self.positioned = true;
         }
 
@@ -209,21 +227,41 @@ impl eframe::App for OverlayApp {
         // (forced mode always shows it, for screenshots).
         let ball = (self.ball_seen || self.force_layer.is_some()).then_some(self.ball);
 
+        // Hug the same corner of the window that the window hugs on screen.
+        let align = match self.corner {
+            Corner::TopLeft => Align2::LEFT_TOP,
+            Corner::TopRight => Align2::RIGHT_TOP,
+            Corner::BottomLeft => Align2::LEFT_BOTTOM,
+            Corner::BottomRight => Align2::RIGHT_BOTTOM,
+        };
+
         if !keys.is_empty() && keys.len() == geometry::MOONLANDER_KEYS.len() {
-            draw_board(ui, &title, keys, base, &self.pressed, ball);
+            draw_board(ui, &title, keys, base, &self.pressed, ball, align);
         } else {
-            draw_name_bubble(ui, &title);
+            draw_name_bubble(ui, &title, align);
         }
     }
 }
 
-fn draw_name_bubble(ui: &mut egui::Ui, title: &str) {
+fn corner_pos(corner: Corner, monitor: egui::Vec2) -> egui::Pos2 {
+    let m = SCREEN_MARGIN;
+    // Extra clearance for the taskbar on bottom corners.
+    let bottom = monitor.y - OVERLAY_H - 52.0;
+    let right = monitor.x - OVERLAY_W - m;
+    match corner {
+        Corner::TopLeft => pos2(m, m),
+        Corner::TopRight => pos2(right, m),
+        Corner::BottomLeft => pos2(m, bottom),
+        Corner::BottomRight => pos2(right, bottom),
+    }
+}
+
+fn draw_name_bubble(ui: &mut egui::Ui, title: &str, align: Align2) {
     let painter = ui.painter();
     let galley = painter.layout_no_wrap(title.to_owned(), FontId::proportional(24.0), TEXT_BRIGHT);
     let pad = vec2(18.0, 11.0);
     let size = galley.size() + pad * 2.0;
-    let max = ui.max_rect();
-    let rect = Rect::from_min_size(pos2(max.right() - size.x, max.top()), size);
+    let rect = align.align_size_within_rect(size, ui.max_rect());
     painter.rect_filled(rect, CornerRadius::same(13), PANEL_BG);
     painter.galley(rect.min + pad, galley, Color32::WHITE);
 }
@@ -235,13 +273,13 @@ fn draw_board(
     base: Option<&[oryx::Key]>,
     pressed: &HashSet<usize>,
     ball: Option<egui::Vec2>,
+    align: Align2,
 ) {
     let pad = 12.0;
     let header_h = 24.0;
     let board_size = vec2(geometry::BOARD_WIDTH_U, geometry::BOARD_HEIGHT_U) * BOARD_SCALE;
     let size = board_size + vec2(pad * 2.0, header_h + pad * 2.0);
-    let max = ui.max_rect();
-    let rect = Rect::from_min_size(pos2(max.right() - size.x, max.top()), size);
+    let rect = align.align_size_within_rect(size, ui.max_rect());
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same(13), PANEL_BG);
     painter.text(

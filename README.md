@@ -16,10 +16,13 @@ Alt-Tab or on the taskbar, and it never steals focus.
 starview [--always] [layout-hash-id] [geometry]
 ```
 
-`--always` keeps the overlay up on the base layer too, instead of only
-appearing on non-base layers. On non-base layers, unmapped (transparent) keys
-show the base layer's label dimmed — matching QMK's fall-through semantics —
-while `KC_NO` keys stay blank.
+A system tray icon (dark disc with a blue dot) provides runtime settings,
+persisted to `%LOCALAPPDATA%\starview\settings.json`: **Pin base layer**
+(keep the overlay up on the base layer too; `--always` forces this on for the
+session) and **Overlay corner** (which display corner to dock to; bottom
+corners leave taskbar clearance), plus **Quit**. On non-base layers, unmapped
+(transparent) keys show the base layer's label dimmed — matching QMK's
+fall-through semantics — while `KC_NO` keys stay blank.
 
 Defaults are baked in (`jmvGw` / `moonlander`) — the hash id and geometry come
 straight from your Oryx URL: `configure.zsa.io/{geometry}/layouts/{hashId}/...`.

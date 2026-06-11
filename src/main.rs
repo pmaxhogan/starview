@@ -5,8 +5,11 @@ mod hid;
 mod keycodes;
 mod oryx;
 mod overlay;
+mod settings;
 #[cfg(windows)]
 mod trackball;
+#[cfg(windows)]
+mod tray;
 
 use eframe::egui;
 
@@ -48,6 +51,9 @@ fn main() -> eframe::Result {
     let mut positional = positional.into_iter();
     let layout_id = positional.next().unwrap_or_else(|| DEFAULT_LAYOUT.to_owned());
     let geometry = positional.next().unwrap_or_else(|| DEFAULT_GEOMETRY.to_owned());
+
+    let mut cfg = settings::load();
+    cfg.pin_base |= always;
 
     let layout = match oryx::load_layout(&layout_id, &geometry) {
         Ok(info) => {
@@ -100,6 +106,16 @@ fn main() -> eframe::Result {
                     let _ = ball_tx.send(overlay::AppEvent::Trackball(dx, dy));
                     ctx.request_repaint();
                 });
+
+                let ctx = cc.egui_ctx.clone();
+                let tray_tx = tx.clone();
+                tray::spawn(cfg, move |event| {
+                    let _ = tray_tx.send(match event {
+                        tray::TrayEvent::Settings(s) => overlay::AppEvent::Settings(s),
+                        tray::TrayEvent::Quit => overlay::AppEvent::Quit,
+                    });
+                    ctx.request_repaint();
+                });
             }
 
             // Periodic Oryx re-fetch so layout edits show up without a restart.
@@ -120,7 +136,7 @@ fn main() -> eframe::Result {
                 })
                 .expect("failed to spawn oryx refresh thread");
 
-            Ok(Box::new(overlay::OverlayApp::new(rx, layout, always)))
+            Ok(Box::new(overlay::OverlayApp::new(rx, layout, cfg)))
         }),
     )
 }

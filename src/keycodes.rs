@@ -129,15 +129,15 @@ pub fn key_label(code: &str) -> Option<&'static str> {
         "KC_QUESTION" | "KC_QUES" => "?",
         "KC_TILDE" | "KC_TILD" => "~",
 
-        // ── whitespace / editing ─────────────────────────────────────────
-        "KC_SPACE" | "KC_SPC" => "Spc",
-        "KC_ENTER" | "KC_ENT" => "Ent",
-        "KC_BACKSPACE" | "KC_BSPACE" | "KC_BSPC" => "Bksp",
-        "KC_DELETE" | "KC_DEL" => "Del",
-        "KC_TAB" => "Tab",
+        // ── whitespace / editing (symbols render via Segoe UI Symbol) ────
+        "KC_SPACE" | "KC_SPC" => "\u{2423}", // ␣
+        "KC_ENTER" | "KC_ENT" => "\u{23CE}", // ⏎
+        "KC_BACKSPACE" | "KC_BSPACE" | "KC_BSPC" => "\u{232B}", // ⌫
+        "KC_DELETE" | "KC_DEL" => "\u{2326}", // ⌦
+        "KC_TAB" => "\u{21E5}",              // ⇥
         "KC_ESCAPE" | "KC_ESC" => "Esc",
         "KC_INSERT" | "KC_INS" => "Ins",
-        "KC_CAPS_LOCK" | "KC_CAPSLOCK" | "KC_CAPS" => "Caps",
+        "KC_CAPS_LOCK" | "KC_CAPSLOCK" | "KC_CAPS" => "\u{21EA}", // ⇪
         "CW_TOGG" | "QK_CAPS_WORD_TOGGLE" => "CWord",
         "KC_UNDO" => "Undo",
         "KC_AGAIN" | "KC_AGIN" => "Redo",
@@ -147,11 +147,11 @@ pub fn key_label(code: &str) -> Option<&'static str> {
         "KC_FIND" => "Find",
 
         // ── modifiers ────────────────────────────────────────────────────
-        "KC_LEFT_SHIFT" | "KC_LSHIFT" | "KC_LSFT" => "Sft",
+        "KC_LEFT_SHIFT" | "KC_LSHIFT" | "KC_LSFT" => "\u{21E7}", // ⇧
         "KC_LEFT_CTRL" | "KC_LCTRL" | "KC_LCTL" => "Ctl",
         "KC_LEFT_ALT" | "KC_LALT" => "Alt",
         "KC_LEFT_GUI" | "KC_LGUI" | "KC_LCMD" | "KC_LWIN" => "Gui",
-        "KC_RIGHT_SHIFT" | "KC_RSHIFT" | "KC_RSFT" => "RSft",
+        "KC_RIGHT_SHIFT" | "KC_RSHIFT" | "KC_RSFT" => "\u{21E7}", // ⇧
         "KC_RIGHT_CTRL" | "KC_RCTRL" | "KC_RCTL" => "RCtl",
         "KC_RIGHT_ALT" | "KC_RALT" | "KC_ALGR" => "RAlt",
         "KC_RIGHT_GUI" | "KC_RGUI" | "KC_RCMD" | "KC_RWIN" => "RGui",

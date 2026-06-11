@@ -243,6 +243,26 @@ impl eframe::App for OverlayApp {
     }
 }
 
+/// Single symbol glyphs (⏎, ␣, ⇧, arrows, punctuation) render visually
+/// smaller than text, so they get a larger font.
+fn label_font_size(label: &str, text: f32, symbol: f32) -> f32 {
+    let mut chars = label.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) if !c.is_ascii_alphanumeric() => symbol,
+        _ => text,
+    }
+}
+
+/// Parses an Oryx "#rrggbb" color.
+fn parse_hex_color(s: &str) -> Option<Color32> {
+    let s = s.strip_prefix('#')?;
+    if s.len() != 6 {
+        return None;
+    }
+    let v = u32::from_str_radix(s, 16).ok()?;
+    Some(Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))
+}
+
 fn corner_pos(corner: Corner, monitor: egui::Vec2) -> egui::Pos2 {
     let m = SCREEN_MARGIN;
     // Extra clearance for the taskbar on bottom corners.
@@ -339,28 +359,40 @@ fn draw_board(
         } else {
             TEXT_BRIGHT
         };
+        // Keys with an Oryx LED color get a border in that color
+        // (#000000 means the LED is off).
+        let border = key
+            .glow_color
+            .as_deref()
+            .and_then(parse_hex_color)
+            .filter(|c| *c != Color32::BLACK)
+            .map(|c| egui::Stroke::new(1.5, c));
         if geom.rot_deg == 0.0 {
             let kr = Rect::from_min_max(corners[0], corners[2]);
             painter.rect_filled(kr, CornerRadius::same(4), fill);
+            if let Some(stroke) = border {
+                painter.rect_stroke(kr, CornerRadius::same(4), stroke, egui::StrokeKind::Inside);
+            }
         } else {
             painter.add(egui::Shape::convex_polygon(
                 corners.to_vec(),
                 fill,
-                egui::Stroke::NONE,
+                border.unwrap_or(egui::Stroke::NONE),
             ));
         }
         let key_painter = painter.with_clip_rect(Rect::from_points(&corners));
 
         if !label.is_empty() {
             let max_w = geom.w * BOARD_SCALE - 5.0;
+            let size = label_font_size(&label, 9.5, 14.5);
             let mut galley =
-                key_painter.layout_no_wrap(label.clone(), FontId::proportional(9.5), text_color);
+                key_painter.layout_no_wrap(label.clone(), FontId::proportional(size), text_color);
             if galley.size().x > max_w {
                 if label.contains(' ') {
                     // Multi-word labels (custom labels mostly) wrap instead.
                     galley = key_painter.layout(label, FontId::proportional(7.0), text_color, max_w);
                 } else {
-                    let font = 9.5 * (max_w / galley.size().x).max(0.6);
+                    let font = size * (max_w / galley.size().x).max(0.6);
                     galley =
                         key_painter.layout_no_wrap(label, FontId::proportional(font), text_color);
                 }
@@ -371,8 +403,8 @@ fn draw_board(
         }
         if let Some(hold) = hold_text(key) {
             let galley = key_painter.layout_no_wrap(
-                hold,
-                FontId::proportional(7.0),
+                hold.clone(),
+                FontId::proportional(label_font_size(&hold, 7.0, 9.5)),
                 Color32::from_rgba_unmultiplied(200, 205, 235, 200),
             );
             // Anchor at the key's bottom-center, rotated with it.

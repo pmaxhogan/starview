@@ -52,7 +52,7 @@ fn run(
     // Generous bottom padding: auto-hiding taskbars pop up OVER the bottom of
     // the menu, so inert blank rows take the hit instead of the real items.
     menu.append(&PredefinedMenuItem::separator())?;
-    for _ in 0..3 {
+    for _ in 0..2 {
         menu.append(&MenuItem::new("", false, None))?;
     }
 

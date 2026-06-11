@@ -44,12 +44,14 @@ pub struct OverlayApp {
     connected: bool,
     positioned: bool,
     shown: bool,
+    /// --always: keep the overlay up on the base layer too.
+    always: bool,
     /// Test override (STARVIEW_FORCE_LAYER): pretend this layer is active.
     force_layer: Option<u8>,
 }
 
 impl OverlayApp {
-    pub fn new(events: Receiver<AppEvent>, layout: Option<LayoutInfo>) -> Self {
+    pub fn new(events: Receiver<AppEvent>, layout: Option<LayoutInfo>, always: bool) -> Self {
         Self {
             events,
             layout,
@@ -58,6 +60,7 @@ impl OverlayApp {
             connected: false,
             positioned: false,
             shown: false,
+            always,
             force_layer: std::env::var("STARVIEW_FORCE_LAYER")
                 .ok()
                 .and_then(|v| v.parse().ok()),
@@ -129,7 +132,9 @@ impl eframe::App for OverlayApp {
         // stops presenting, so its swapchain kept the previous layer's frame
         // and flashed it on re-show — content-level hiding swaps in a single
         // frame instead. Forced mode also shows layer 0 for screenshots.
-        self.shown = self.force_layer.is_some() || (self.connected && self.layer != 0);
+        self.shown = self.force_layer.is_some()
+            || self.always
+            || (self.connected && self.layer != 0);
 
         // Low-rate heartbeat so the style assert above self-heals even when
         // no HID events arrive.
@@ -150,8 +155,19 @@ impl eframe::App for OverlayApp {
 
         // Only render the board when the layout's key list lines up with the
         // geometry table; otherwise fall back to the name-only bubble.
+        // Base-layer keys, for KC_TRANSPARENT fall-through labels.
+        let base = (self.layer != 0)
+            .then(|| {
+                self.layout
+                    .as_ref()
+                    .and_then(|l| l.layers.iter().find(|ly| ly.position == 0))
+                    .map(|ly| ly.keys.as_slice())
+            })
+            .flatten()
+            .filter(|b| b.len() == geometry::MOONLANDER_KEYS.len());
+
         if !keys.is_empty() && keys.len() == geometry::MOONLANDER_KEYS.len() {
-            draw_board(ui, &title, keys, &self.pressed);
+            draw_board(ui, &title, keys, base, &self.pressed);
         } else {
             draw_name_bubble(ui, &title);
         }
@@ -169,7 +185,13 @@ fn draw_name_bubble(ui: &mut egui::Ui, title: &str) {
     painter.galley(rect.min + pad, galley, Color32::WHITE);
 }
 
-fn draw_board(ui: &mut egui::Ui, title: &str, keys: &[oryx::Key], pressed: &HashSet<usize>) {
+fn draw_board(
+    ui: &mut egui::Ui,
+    title: &str,
+    keys: &[oryx::Key],
+    base: Option<&[oryx::Key]>,
+    pressed: &HashSet<usize>,
+) {
     let pad = 12.0;
     let header_h = 24.0;
     let board_size = vec2(geometry::BOARD_WIDTH_U, geometry::BOARD_HEIGHT_U) * BOARD_SCALE;
@@ -211,14 +233,29 @@ fn draw_board(ui: &mut egui::Ui, title: &str, keys: &[oryx::Key], pressed: &Hash
         ];
         let center = to_screen(geom.x + geom.w / 2.0, geom.y + geom.h / 2.0);
 
-        let label = key_text(key);
+        let mut label = key_text(key);
+        // KC_TRANSPARENT falls through to the base layer in QMK (KC_NO does
+        // not) — show the inherited label dimmed, on the unmapped background.
+        let mut inherited = false;
+        if label.is_empty()
+            && tap_is_transparent(key)
+            && let Some(base_key) = base.and_then(|b| b.get(i))
+        {
+            label = key_text(base_key);
+            inherited = !label.is_empty();
+        }
         let fill = if pressed.contains(&i) {
             // Physically held right now — accent highlight.
             Color32::from_rgba_unmultiplied(110, 165, 255, 150)
-        } else if label.is_empty() {
+        } else if label.is_empty() || inherited {
             Color32::from_rgba_unmultiplied(255, 255, 255, 10)
         } else {
             Color32::from_rgba_unmultiplied(255, 255, 255, 32)
+        };
+        let text_color = if inherited {
+            Color32::from_rgba_unmultiplied(200, 205, 220, 140)
+        } else {
+            TEXT_BRIGHT
         };
         if geom.rot_deg == 0.0 {
             let kr = Rect::from_min_max(corners[0], corners[2]);
@@ -235,15 +272,15 @@ fn draw_board(ui: &mut egui::Ui, title: &str, keys: &[oryx::Key], pressed: &Hash
         if !label.is_empty() {
             let max_w = geom.w * BOARD_SCALE - 5.0;
             let mut galley =
-                key_painter.layout_no_wrap(label.clone(), FontId::proportional(9.5), TEXT_BRIGHT);
+                key_painter.layout_no_wrap(label.clone(), FontId::proportional(9.5), text_color);
             if galley.size().x > max_w {
                 if label.contains(' ') {
                     // Multi-word labels (custom labels mostly) wrap instead.
-                    galley = key_painter.layout(label, FontId::proportional(7.0), TEXT_BRIGHT, max_w);
+                    galley = key_painter.layout(label, FontId::proportional(7.0), text_color, max_w);
                 } else {
                     let font = 9.5 * (max_w / galley.size().x).max(0.6);
                     galley =
-                        key_painter.layout_no_wrap(label, FontId::proportional(font), TEXT_BRIGHT);
+                        key_painter.layout_no_wrap(label, FontId::proportional(font), text_color);
                 }
             }
             // Center the galley on the key, rotated with it.
@@ -262,6 +299,18 @@ fn draw_board(ui: &mut egui::Ui, title: &str, keys: &[oryx::Key], pressed: &Hash
             key_painter.add(TextShape::new(pos, galley, Color32::WHITE).with_angle(angle));
         }
     }
+}
+
+/// True when the key's tap slot falls through to lower layers (KC_TRANSPARENT
+/// or simply unset). KC_NO is NOT transparent — it blocks fall-through.
+fn tap_is_transparent(key: &oryx::Key) -> bool {
+    key.custom_label
+        .as_ref()
+        .is_none_or(|l| l.trim().is_empty())
+        && key.tap.as_ref().is_none_or(|a| {
+            a.macro_.is_none()
+                && matches!(a.code.as_deref(), None | Some("KC_TRANSPARENT" | "KC_TRNS"))
+        })
 }
 
 /// Primary label for a keycap: the Oryx custom label if set, else the tap action.

@@ -36,10 +36,16 @@ fn install_symbol_font(ctx: &egui::Context) {
 }
 
 fn main() -> eframe::Result {
-    // Usage: starview [layout-hash-id] [geometry]
-    let mut args = std::env::args().skip(1);
-    let layout_id = args.next().unwrap_or_else(|| DEFAULT_LAYOUT.to_owned());
-    let geometry = args.next().unwrap_or_else(|| DEFAULT_GEOMETRY.to_owned());
+    // Usage: starview [--always] [layout-hash-id] [geometry]
+    let (flags, positional): (Vec<String>, Vec<String>) =
+        std::env::args().skip(1).partition(|a| a.starts_with("--"));
+    let always = flags.iter().any(|f| f == "--always");
+    for flag in flags.iter().filter(|f| *f != "--always") {
+        eprintln!("unknown flag {flag} (known: --always)");
+    }
+    let mut positional = positional.into_iter();
+    let layout_id = positional.next().unwrap_or_else(|| DEFAULT_LAYOUT.to_owned());
+    let geometry = positional.next().unwrap_or_else(|| DEFAULT_GEOMETRY.to_owned());
 
     let layout = match oryx::load_layout(&layout_id, &geometry) {
         Ok(info) => {
@@ -102,7 +108,7 @@ fn main() -> eframe::Result {
                 })
                 .expect("failed to spawn oryx refresh thread");
 
-            Ok(Box::new(overlay::OverlayApp::new(rx, layout)))
+            Ok(Box::new(overlay::OverlayApp::new(rx, layout, always)))
         }),
     )
 }

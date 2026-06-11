@@ -13,8 +13,13 @@ Alt-Tab or on the taskbar, and it never steals focus.
 ## Usage
 
 ```
-starview [layout-hash-id] [geometry]
+starview [--always] [layout-hash-id] [geometry]
 ```
+
+`--always` keeps the overlay up on the base layer too, instead of only
+appearing on non-base layers. On non-base layers, unmapped (transparent) keys
+show the base layer's label dimmed — matching QMK's fall-through semantics —
+while `KC_NO` keys stay blank.
 
 Defaults are baked in (`jmvGw` / `moonlander`) — the hash id and geometry come
 straight from your Oryx URL: `configure.zsa.io/{geometry}/layouts/{hashId}/...`.

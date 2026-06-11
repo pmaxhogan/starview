@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod geometry;
+#[cfg(windows)]
+mod hdr;
 mod hid;
 mod keycodes;
 mod oryx;
@@ -120,6 +122,7 @@ fn main() -> eframe::Result {
                 });
 
                 updater::spawn_checker(tray::notify_update);
+                hdr::spawn_monitor();
             }
 
             // Periodic Oryx re-fetch so layout edits show up without a restart.

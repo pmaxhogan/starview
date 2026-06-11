@@ -42,6 +42,44 @@ const BOARD_SCALE: f32 = 26.0;
 const PANEL_BG: Color32 = Color32::from_rgba_premultiplied(13, 14, 22, 200);
 const TEXT_BRIGHT: Color32 = Color32::from_rgb(240, 240, 255);
 
+/// Theme colors; HDR mode swaps to a high-contrast variant because SDR
+/// surfaces render at reference white while HDR content goes far brighter,
+/// washing out the translucent dark theme.
+struct Palette {
+    panel_bg: Color32,
+    text: Color32,
+    text_inherited: Color32,
+    hold_text: Color32,
+    key_fill: Color32,
+    key_blank: Color32,
+}
+
+fn palette() -> Palette {
+    #[cfg(windows)]
+    let hdr = crate::hdr::active();
+    #[cfg(not(windows))]
+    let hdr = false;
+    if hdr {
+        Palette {
+            panel_bg: Color32::from_rgba_unmultiplied(16, 18, 28, 246),
+            text: Color32::WHITE,
+            text_inherited: Color32::from_rgba_unmultiplied(225, 228, 240, 200),
+            hold_text: Color32::from_rgba_unmultiplied(225, 228, 250, 255),
+            key_fill: Color32::from_rgba_unmultiplied(255, 255, 255, 60),
+            key_blank: Color32::from_rgba_unmultiplied(255, 255, 255, 22),
+        }
+    } else {
+        Palette {
+            panel_bg: PANEL_BG,
+            text: TEXT_BRIGHT,
+            text_inherited: Color32::from_rgba_unmultiplied(200, 205, 220, 140),
+            hold_text: Color32::from_rgba_unmultiplied(200, 205, 235, 200),
+            key_fill: Color32::from_rgba_unmultiplied(255, 255, 255, 32),
+            key_blank: Color32::from_rgba_unmultiplied(255, 255, 255, 10),
+        }
+    }
+}
+
 pub struct OverlayApp {
     events: Receiver<AppEvent>,
     layout: Option<LayoutInfo>,
@@ -279,12 +317,13 @@ fn corner_pos(corner: Corner, monitor: egui::Vec2) -> egui::Pos2 {
 }
 
 fn draw_name_bubble(ui: &mut egui::Ui, title: &str, align: Align2) {
+    let p = palette();
     let painter = ui.painter();
-    let galley = painter.layout_no_wrap(title.to_owned(), FontId::proportional(24.0), TEXT_BRIGHT);
+    let galley = painter.layout_no_wrap(title.to_owned(), FontId::proportional(24.0), p.text);
     let pad = vec2(18.0, 11.0);
     let size = galley.size() + pad * 2.0;
     let rect = align.align_size_within_rect(size, ui.max_rect());
-    painter.rect_filled(rect, CornerRadius::same(13), PANEL_BG);
+    painter.rect_filled(rect, CornerRadius::same(13), p.panel_bg);
     painter.galley(rect.min + pad, galley, Color32::WHITE);
 }
 
@@ -304,14 +343,15 @@ fn draw_board(
     // nominal board box at the bottom.
     let size = board_size + vec2(pad * 2.0, header_h + pad * 2.0 + 5.0);
     let rect = align.align_size_within_rect(size, ui.max_rect());
+    let p = palette();
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(13), PANEL_BG);
+    painter.rect_filled(rect, CornerRadius::same(13), p.panel_bg);
     painter.text(
         rect.min + vec2(pad + 2.0, pad - 2.0),
         Align2::LEFT_TOP,
         title,
         FontId::proportional(15.0),
-        TEXT_BRIGHT,
+        p.text,
     );
 
     let origin = rect.min + vec2(pad, pad + header_h);
@@ -368,15 +408,11 @@ fn draw_board(
             // Physically held right now — accent highlight.
             Color32::from_rgba_unmultiplied(110, 165, 255, 150)
         } else if label.is_empty() || inherited {
-            Color32::from_rgba_unmultiplied(255, 255, 255, 10)
+            p.key_blank
         } else {
-            Color32::from_rgba_unmultiplied(255, 255, 255, 32)
+            p.key_fill
         };
-        let text_color = if inherited {
-            Color32::from_rgba_unmultiplied(200, 205, 220, 140)
-        } else {
-            TEXT_BRIGHT
-        };
+        let text_color = if inherited { p.text_inherited } else { p.text };
         // Keys with an Oryx LED color get a border in that color
         // (#000000 means the LED is off).
         let border = key
@@ -423,7 +459,7 @@ fn draw_board(
             let galley = key_painter.layout_no_wrap(
                 hold.clone(),
                 FontId::proportional(label_font_size(&hold, 7.0, 8.0, 9.5)),
-                Color32::from_rgba_unmultiplied(200, 205, 235, 200),
+                p.hold_text,
             );
             // Anchor at the key's bottom-center, rotated with it.
             let anchor = to_screen(kx + kw / 2.0, ky + kh - 2.0 * gap);

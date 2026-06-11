@@ -194,6 +194,37 @@ pub const MOONLANDER_KEYS: &[KeyGeom] = &[
     KeyGeom { x: 11.0, y: 6.0, w: 1.0, h: 1.5, rot_deg: -30.0, rot_x: 10.5, rot_y: 6.25 },
 ];
 
+/// QMK matrix position (row, col) for each Oryx key index — same source and
+/// ordering as `MOONLANDER_KEYS` (keyboard.json's interleaved visual order
+/// permuted into Oryx per-half order; verified by matching x/y coordinates).
+/// Left half is matrix rows 0-5, right half rows 6-11; the keyboard reports
+/// keydown/keyup over raw HID as (col, row).
+pub const MOONLANDER_MATRIX: &[(u8, u8)] = &[
+    // L rows 0-4
+    (0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (0, 6),
+    (1, 0), (1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6),
+    (2, 0), (2, 1), (2, 2), (2, 3), (2, 4), (2, 5), (2, 6),
+    (3, 0), (3, 1), (3, 2), (3, 3), (3, 4), (3, 5),
+    (4, 0), (4, 1), (4, 2), (4, 3), (4, 4),
+    // L big red, then piano keys left-to-right
+    (5, 3),
+    (5, 0), (5, 1), (5, 2),
+    // R rows 0-4
+    (6, 0), (6, 1), (6, 2), (6, 3), (6, 4), (6, 5), (6, 6),
+    (7, 0), (7, 1), (7, 2), (7, 3), (7, 4), (7, 5), (7, 6),
+    (8, 0), (8, 1), (8, 2), (8, 3), (8, 4), (8, 5), (8, 6),
+    (9, 1), (9, 2), (9, 3), (9, 4), (9, 5), (9, 6),
+    (10, 2), (10, 3), (10, 4), (10, 5), (10, 6),
+    // R big red, then piano keys left-to-right
+    (11, 3),
+    (11, 4), (11, 5), (11, 6),
+];
+
+/// Looks up the Oryx key index for a matrix position from a HID key event.
+pub fn key_index_for_matrix(row: u8, col: u8) -> Option<usize> {
+    MOONLANDER_MATRIX.iter().position(|&(r, c)| r == row && c == col)
+}
+
 /// Bounding box of the whole board in key units (including rotated keys).
 ///
 /// Width is set by the main grid: right half outer column at x = 16, 1u wide.
@@ -233,6 +264,15 @@ mod tests {
                 assert!(rx >= -1e-4 && rx <= BOARD_WIDTH_U + 1e-4, "x out of box: {rx}");
                 assert!(ry >= -1e-4 && ry <= BOARD_HEIGHT_U + 1e-4, "y out of box: {ry}");
             }
+        }
+    }
+
+    #[test]
+    fn matrix_table_matches_keys_and_is_unique() {
+        assert_eq!(MOONLANDER_MATRIX.len(), MOONLANDER_KEYS.len());
+        for (i, &(r, c)) in MOONLANDER_MATRIX.iter().enumerate() {
+            assert!(r < 12 && c < 7, "matrix ({r},{c}) out of range");
+            assert_eq!(key_index_for_matrix(r, c), Some(i), "duplicate entry ({r},{c})");
         }
     }
 }

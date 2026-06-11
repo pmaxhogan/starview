@@ -3,7 +3,9 @@
 A tiny Windows overlay that shows which layer your ZSA keyboard is on — but only
 when you're *not* on the base layer. A semi-transparent panel appears in the
 top-right corner rendering the active layer's full keymap (keycaps, labels,
-hold-action hints), and disappears when you return to base.
+hold-action hints, live highlights on physically pressed keys), and disappears
+when you return to base. The layout re-syncs from Oryx every 5 minutes, so
+edits in the configurator show up without restarting.
 
 The overlay is a ghost: clicks pass straight through it, it never appears in
 Alt-Tab or on the taskbar, and it never steals focus.
@@ -50,7 +52,10 @@ layer regardless of what the keyboard reports.
   validated against a live layout). Labels compose from Oryx custom labels,
   a ~390-entry QMK keycode table, layer-switch targets ("MO 2"), and
   modifier wrappers ("G+1", "C+Bksp"). Windows' Segoe UI Symbol is loaded as
-  a font fallback so arrows and symbol labels render.
+  a font fallback so arrows and symbol labels render. Thumb-cluster keys are
+  drawn as actually-rotated polygons with rotated labels. Keydown/keyup HID
+  events (matrix positions, mapped through the same keyboard.json table)
+  highlight physically held keys while the overlay is visible.
 - **Overlay window** (`src/overlay.rs`): eframe/egui with the **glow** renderer
   (wgpu, the eframe default, cannot do transparent windows on Windows). The
   ghost behavior is raw Win32: `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW |

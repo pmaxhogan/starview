@@ -6,14 +6,23 @@
 //! wholesale on its own flag changes, so the styles are re-asserted every
 //! `logic` tick (a no-op compare once stable).
 
+use std::collections::HashSet;
 use std::sync::mpsc::Receiver;
 
 use eframe::egui;
+use egui::epaint::TextShape;
 use egui::{Align2, Color32, CornerRadius, FontId, Rect, pos2, vec2};
 
-use crate::hid::LayerEvent;
+use crate::hid::HidEvent;
 use crate::oryx::{self, LayoutInfo};
 use crate::{geometry, keycodes};
+
+/// Everything the background threads feed into the UI.
+pub enum AppEvent {
+    Hid(HidEvent),
+    /// Refreshed layout from the periodic Oryx re-fetch.
+    Layout(LayoutInfo),
+}
 
 pub const OVERLAY_W: f32 = 480.0;
 pub const OVERLAY_H: f32 = 272.0;
@@ -27,9 +36,11 @@ const PANEL_BG: Color32 = Color32::from_rgba_premultiplied(13, 14, 22, 200);
 const TEXT_BRIGHT: Color32 = Color32::from_rgb(240, 240, 255);
 
 pub struct OverlayApp {
-    events: Receiver<LayerEvent>,
+    events: Receiver<AppEvent>,
     layout: Option<LayoutInfo>,
     layer: u8,
+    /// Oryx key indices currently held down on the physical board.
+    pressed: HashSet<usize>,
     connected: bool,
     positioned: bool,
     shown: bool,
@@ -38,11 +49,12 @@ pub struct OverlayApp {
 }
 
 impl OverlayApp {
-    pub fn new(events: Receiver<LayerEvent>, layout: Option<LayoutInfo>) -> Self {
+    pub fn new(events: Receiver<AppEvent>, layout: Option<LayoutInfo>) -> Self {
         Self {
             events,
             layout,
             layer: 0,
+            pressed: HashSet::new(),
             connected: false,
             positioned: false,
             shown: false,
@@ -77,11 +89,25 @@ impl eframe::App for OverlayApp {
 
         for event in self.events.try_iter() {
             match event {
-                LayerEvent::Layer(idx) => {
+                AppEvent::Hid(HidEvent::Layer(idx)) => {
                     self.layer = idx;
                     self.connected = true;
                 }
-                LayerEvent::Disconnected => self.connected = false,
+                AppEvent::Hid(HidEvent::KeyDown { row, col }) => {
+                    if let Some(i) = geometry::key_index_for_matrix(row, col) {
+                        self.pressed.insert(i);
+                    }
+                }
+                AppEvent::Hid(HidEvent::KeyUp { row, col }) => {
+                    if let Some(i) = geometry::key_index_for_matrix(row, col) {
+                        self.pressed.remove(&i);
+                    }
+                }
+                AppEvent::Hid(HidEvent::Disconnected) => {
+                    self.connected = false;
+                    self.pressed.clear();
+                }
+                AppEvent::Layout(info) => self.layout = Some(info),
             }
         }
 
@@ -126,7 +152,7 @@ impl eframe::App for OverlayApp {
         // Only render the board when the layout's key list lines up with the
         // geometry table; otherwise fall back to the name-only bubble.
         if !keys.is_empty() && keys.len() == geometry::MOONLANDER_KEYS.len() {
-            draw_board(ui, &title, keys);
+            draw_board(ui, &title, keys, &self.pressed);
         } else {
             draw_name_bubble(ui, &title);
         }
@@ -144,7 +170,7 @@ fn draw_name_bubble(ui: &mut egui::Ui, title: &str) {
     painter.galley(rect.min + pad, galley, Color32::WHITE);
 }
 
-fn draw_board(ui: &mut egui::Ui, title: &str, keys: &[oryx::Key]) {
+fn draw_board(ui: &mut egui::Ui, title: &str, keys: &[oryx::Key], pressed: &HashSet<usize>) {
     let pad = 12.0;
     let header_h = 24.0;
     let board_size = vec2(geometry::BOARD_WIDTH_U, geometry::BOARD_HEIGHT_U) * BOARD_SCALE;
@@ -162,25 +188,53 @@ fn draw_board(ui: &mut egui::Ui, title: &str, keys: &[oryx::Key]) {
     );
 
     let origin = rect.min + vec2(pad, pad + header_h);
-    for (geom, key) in geometry::MOONLANDER_KEYS.iter().zip(keys) {
-        // Axis-aligned keycaps drawn at their rotated centers — close enough
-        // for the thumb clusters at this size.
-        let (cx, cy) = rotated_center(geom);
-        let center = origin + vec2(cx, cy) * BOARD_SCALE;
-        let key_size = vec2(geom.w, geom.h) * BOARD_SCALE - vec2(2.0, 2.0);
-        let kr = Rect::from_center_size(center, key_size);
+    for (i, (geom, key)) in geometry::MOONLANDER_KEYS.iter().zip(keys).enumerate() {
+        let angle = geom.rot_deg.to_radians();
+        let (sin, cos) = angle.sin_cos();
+        // Unit-space point -> screen, applying the key's rotation.
+        let to_screen = |ux: f32, uy: f32| {
+            let (px, py) = if geom.rot_deg == 0.0 {
+                (ux, uy)
+            } else {
+                let (dx, dy) = (ux - geom.rot_x, uy - geom.rot_y);
+                (geom.rot_x + dx * cos - dy * sin, geom.rot_y + dx * sin + dy * cos)
+            };
+            origin + vec2(px, py) * BOARD_SCALE
+        };
+        let rotate = |v: egui::Vec2| vec2(v.x * cos - v.y * sin, v.x * sin + v.y * cos);
+
+        let gap = 1.0 / BOARD_SCALE; // keycap gap, in key units
+        let corners = [
+            to_screen(geom.x + gap, geom.y + gap),
+            to_screen(geom.x + geom.w - gap, geom.y + gap),
+            to_screen(geom.x + geom.w - gap, geom.y + geom.h - gap),
+            to_screen(geom.x + gap, geom.y + geom.h - gap),
+        ];
+        let center = to_screen(geom.x + geom.w / 2.0, geom.y + geom.h / 2.0);
 
         let label = key_text(key);
-        let fill = if label.is_empty() {
+        let fill = if pressed.contains(&i) {
+            // Physically held right now — accent highlight.
+            Color32::from_rgba_unmultiplied(110, 165, 255, 150)
+        } else if label.is_empty() {
             Color32::from_rgba_unmultiplied(255, 255, 255, 10)
         } else {
             Color32::from_rgba_unmultiplied(255, 255, 255, 32)
         };
-        painter.rect_filled(kr, CornerRadius::same(4), fill);
-        let key_painter = painter.with_clip_rect(kr);
+        if geom.rot_deg == 0.0 {
+            let kr = Rect::from_min_max(corners[0], corners[2]);
+            painter.rect_filled(kr, CornerRadius::same(4), fill);
+        } else {
+            painter.add(egui::Shape::convex_polygon(
+                corners.to_vec(),
+                fill,
+                egui::Stroke::NONE,
+            ));
+        }
+        let key_painter = painter.with_clip_rect(Rect::from_points(&corners));
 
         if !label.is_empty() {
-            let max_w = kr.width() - 3.0;
+            let max_w = geom.w * BOARD_SCALE - 5.0;
             let mut galley =
                 key_painter.layout_no_wrap(label.clone(), FontId::proportional(9.5), TEXT_BRIGHT);
             if galley.size().x > max_w {
@@ -193,29 +247,22 @@ fn draw_board(ui: &mut egui::Ui, title: &str, keys: &[oryx::Key]) {
                         key_painter.layout_no_wrap(label, FontId::proportional(font), TEXT_BRIGHT);
                 }
             }
-            key_painter.galley(kr.center() - galley.size() / 2.0, galley, Color32::WHITE);
+            // Center the galley on the key, rotated with it.
+            let pos = center - rotate(galley.size() / 2.0);
+            key_painter.add(TextShape::new(pos, galley, Color32::WHITE).with_angle(angle));
         }
         if let Some(hold) = hold_text(key) {
-            key_painter.text(
-                pos2(kr.center().x, kr.bottom() - 1.0),
-                Align2::CENTER_BOTTOM,
+            let galley = key_painter.layout_no_wrap(
                 hold,
                 FontId::proportional(7.0),
                 Color32::from_rgba_unmultiplied(200, 205, 235, 200),
             );
+            // Anchor at the key's bottom-center, rotated with it.
+            let anchor = to_screen(geom.x + geom.w / 2.0, geom.y + geom.h - 2.0 * gap);
+            let pos = anchor - rotate(vec2(galley.size().x / 2.0, galley.size().y));
+            key_painter.add(TextShape::new(pos, galley, Color32::WHITE).with_angle(angle));
         }
     }
-}
-
-fn rotated_center(g: &geometry::KeyGeom) -> (f32, f32) {
-    let cx = g.x + g.w / 2.0;
-    let cy = g.y + g.h / 2.0;
-    if g.rot_deg == 0.0 {
-        return (cx, cy);
-    }
-    let (s, c) = g.rot_deg.to_radians().sin_cos();
-    let (dx, dy) = (cx - g.rot_x, cy - g.rot_y);
-    (g.rot_x + dx * c - dy * s, g.rot_y + dx * s + dy * c)
 }
 
 /// Primary label for a keycap: the Oryx custom label if set, else the tap action.

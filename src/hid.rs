@@ -19,26 +19,32 @@ const REPORT_SIZE: usize = 32;
 const CMD_PAIRING_INIT: u8 = 0x01;
 const EVT_PAIRING_SUCCESS: u8 = 0x04;
 const EVT_LAYER: u8 = 0x05;
+const EVT_KEYDOWN: u8 = 0x06;
+const EVT_KEYUP: u8 = 0x07;
 const EVT_ERROR: u8 = 0xFF;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LayerEvent {
+pub enum HidEvent {
     /// Active layer changed; 0 is the base layer.
     Layer(u8),
+    /// Physical key pressed, as a QMK matrix position.
+    KeyDown { row: u8, col: u8 },
+    /// Physical key released.
+    KeyUp { row: u8, col: u8 },
     /// No ZSA keyboard found / it was unplugged.
     Disconnected,
 }
 
-/// Spawns a background thread that emits [`LayerEvent`]s for as long as the
+/// Spawns a background thread that emits [`HidEvent`]s for as long as the
 /// process lives, reconnecting and re-pairing whenever the keyboard goes away.
-pub fn spawn_watcher(mut on_event: impl FnMut(LayerEvent) + Send + 'static) {
+pub fn spawn_watcher(mut on_event: impl FnMut(HidEvent) + Send + 'static) {
     std::thread::Builder::new()
         .name("hid-layer-watcher".into())
         .spawn(move || pump(&mut on_event))
         .expect("failed to spawn HID watcher thread");
 }
 
-fn pump(on_event: &mut impl FnMut(LayerEvent)) {
+fn pump(on_event: &mut impl FnMut(HidEvent)) {
     let mut api = loop {
         match HidApi::new() {
             Ok(api) => break api,
@@ -53,11 +59,11 @@ fn pump(on_event: &mut impl FnMut(LayerEvent)) {
         match open_keyboard(&api) {
             Some(dev) => {
                 listen(&dev, on_event);
-                on_event(LayerEvent::Disconnected);
+                on_event(HidEvent::Disconnected);
                 std::thread::sleep(Duration::from_millis(500));
             }
             None => {
-                on_event(LayerEvent::Disconnected);
+                on_event(HidEvent::Disconnected);
                 std::thread::sleep(Duration::from_secs(2));
             }
         }
@@ -79,7 +85,7 @@ fn pair(dev: &HidDevice) -> bool {
 }
 
 /// Reads events until the device errors out (unplug, reset, suspend).
-fn listen(dev: &HidDevice, on_event: &mut impl FnMut(LayerEvent)) {
+fn listen(dev: &HidDevice, on_event: &mut impl FnMut(HidEvent)) {
     if !pair(dev) {
         return;
     }
@@ -99,10 +105,13 @@ fn listen(dev: &HidDevice, on_event: &mut impl FnMut(LayerEvent)) {
                 }
             }
             Ok(_) => match buf[0] {
-                EVT_LAYER => on_event(LayerEvent::Layer(buf[1])),
+                EVT_LAYER => on_event(HidEvent::Layer(buf[1])),
+                // Firmware sends [evt, col, row, ...] for key events.
+                EVT_KEYDOWN => on_event(HidEvent::KeyDown { row: buf[2], col: buf[1] }),
+                EVT_KEYUP => on_event(HidEvent::KeyUp { row: buf[2], col: buf[1] }),
                 EVT_PAIRING_SUCCESS => {} // a layer event follows immediately
                 EVT_ERROR => eprintln!("oryx error frame: {:02x?}", &buf[..4]),
-                _ => {} // keydown/keyup (heatmap) and other events — ignore
+                _ => {} // RGB/status-LED and other events — ignore
             },
             Err(_) => return, // device gone; caller re-enumerates and re-pairs
         }

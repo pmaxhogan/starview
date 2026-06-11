@@ -73,14 +73,35 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "starview",
         options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             install_symbol_font(&cc.egui_ctx);
             let (tx, rx) = std::sync::mpsc::channel();
+
             let ctx = cc.egui_ctx.clone();
+            let hid_tx = tx.clone();
             hid::spawn_watcher(move |event| {
-                let _ = tx.send(event);
+                let _ = hid_tx.send(overlay::AppEvent::Hid(event));
                 ctx.request_repaint();
             });
+
+            // Periodic Oryx re-fetch so layout edits show up without a restart.
+            let ctx = cc.egui_ctx.clone();
+            std::thread::Builder::new()
+                .name("oryx-refresh".into())
+                .spawn(move || {
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(300));
+                        match oryx::load_layout(&layout_id, &geometry) {
+                            Ok(info) => {
+                                let _ = tx.send(overlay::AppEvent::Layout(info));
+                                ctx.request_repaint();
+                            }
+                            Err(err) => eprintln!("layout refresh failed: {err:#}"),
+                        }
+                    }
+                })
+                .expect("failed to spawn oryx refresh thread");
+
             Ok(Box::new(overlay::OverlayApp::new(rx, layout)))
         }),
     )

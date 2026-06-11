@@ -300,7 +300,9 @@ fn draw_board(
     let pad = 12.0;
     let header_h = 24.0;
     let board_size = vec2(geometry::BOARD_WIDTH_U, geometry::BOARD_HEIGHT_U) * BOARD_SCALE;
-    let size = board_size + vec2(pad * 2.0, header_h + pad * 2.0);
+    // A little extra height: the enlarged thumb clusters extend past the
+    // nominal board box at the bottom.
+    let size = board_size + vec2(pad * 2.0, header_h + pad * 2.0 + 5.0);
     let rect = align.align_size_within_rect(size, ui.max_rect());
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same(13), PANEL_BG);
@@ -313,9 +315,23 @@ fn draw_board(
     );
 
     let origin = rect.min + vec2(pad, pad + header_h);
+    // Thumb keys (the rotated ones) draw slightly enlarged; scaling around the
+    // cluster's rotation origin grows and spreads them together, so they don't
+    // collide with each other.
+    const THUMB_SCALE: f32 = 1.08;
     for (i, (geom, key)) in geometry::MOONLANDER_KEYS.iter().zip(keys).enumerate() {
         let angle = geom.rot_deg.to_radians();
         let (sin, cos) = angle.sin_cos();
+        let (kx, ky, kw, kh) = if geom.rot_deg == 0.0 {
+            (geom.x, geom.y, geom.w, geom.h)
+        } else {
+            (
+                geom.rot_x + (geom.x - geom.rot_x) * THUMB_SCALE,
+                geom.rot_y + (geom.y - geom.rot_y) * THUMB_SCALE,
+                geom.w * THUMB_SCALE,
+                geom.h * THUMB_SCALE,
+            )
+        };
         // Unit-space point -> screen, applying the key's rotation.
         let to_screen = |ux: f32, uy: f32| {
             let (px, py) = if geom.rot_deg == 0.0 {
@@ -330,12 +346,12 @@ fn draw_board(
 
         let gap = 1.0 / BOARD_SCALE; // keycap gap, in key units
         let corners = [
-            to_screen(geom.x + gap, geom.y + gap),
-            to_screen(geom.x + geom.w - gap, geom.y + gap),
-            to_screen(geom.x + geom.w - gap, geom.y + geom.h - gap),
-            to_screen(geom.x + gap, geom.y + geom.h - gap),
+            to_screen(kx + gap, ky + gap),
+            to_screen(kx + kw - gap, ky + gap),
+            to_screen(kx + kw - gap, ky + kh - gap),
+            to_screen(kx + gap, ky + kh - gap),
         ];
-        let center = to_screen(geom.x + geom.w / 2.0, geom.y + geom.h / 2.0);
+        let center = to_screen(kx + kw / 2.0, ky + kh / 2.0);
 
         let mut label = key_text(key);
         // KC_TRANSPARENT falls through to the base layer in QMK (KC_NO does
@@ -385,7 +401,7 @@ fn draw_board(
         let key_painter = painter.with_clip_rect(Rect::from_points(&corners));
 
         if !label.is_empty() {
-            let max_w = geom.w * BOARD_SCALE - 5.0;
+            let max_w = kw * BOARD_SCALE - 5.0;
             let size = label_font_size(&label, 9.5, 11.5, 14.5);
             let mut galley =
                 key_painter.layout_no_wrap(label.clone(), FontId::proportional(size), text_color);
@@ -410,7 +426,7 @@ fn draw_board(
                 Color32::from_rgba_unmultiplied(200, 205, 235, 200),
             );
             // Anchor at the key's bottom-center, rotated with it.
-            let anchor = to_screen(geom.x + geom.w / 2.0, geom.y + geom.h - 2.0 * gap);
+            let anchor = to_screen(kx + kw / 2.0, ky + kh - 2.0 * gap);
             let pos = anchor - rotate(vec2(galley.size().x / 2.0, galley.size().y));
             key_painter.add(TextShape::new(pos, galley, Color32::WHITE).with_angle(angle));
         }

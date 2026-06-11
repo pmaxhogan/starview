@@ -243,12 +243,14 @@ impl eframe::App for OverlayApp {
     }
 }
 
-/// Single symbol glyphs (⏎, ␣, ⇧, arrows, punctuation) render visually
-/// smaller than text, so they get a larger font.
-fn label_font_size(label: &str, text: f32, symbol: f32) -> f32 {
+/// Single characters get a larger font than multi-char text labels: letters
+/// and digits a bit larger, symbol glyphs (⏎, ␣, ⇧, arrows, punctuation) —
+/// which render visually smaller — larger still.
+fn label_font_size(label: &str, text: f32, letter: f32, symbol: f32) -> f32 {
     let mut chars = label.chars();
     match (chars.next(), chars.next()) {
-        (Some(c), None) if !c.is_ascii_alphanumeric() => symbol,
+        (Some(c), None) if c.is_ascii_alphanumeric() => letter,
+        (Some(_), None) => symbol,
         _ => text,
     }
 }
@@ -384,7 +386,7 @@ fn draw_board(
 
         if !label.is_empty() {
             let max_w = geom.w * BOARD_SCALE - 5.0;
-            let size = label_font_size(&label, 9.5, 14.5);
+            let size = label_font_size(&label, 9.5, 11.5, 14.5);
             let mut galley =
                 key_painter.layout_no_wrap(label.clone(), FontId::proportional(size), text_color);
             if galley.size().x > max_w {
@@ -404,7 +406,7 @@ fn draw_board(
         if let Some(hold) = hold_text(key) {
             let galley = key_painter.layout_no_wrap(
                 hold.clone(),
-                FontId::proportional(label_font_size(&hold, 7.0, 9.5)),
+                FontId::proportional(label_font_size(&hold, 7.0, 8.0, 9.5)),
                 Color32::from_rgba_unmultiplied(200, 205, 235, 200),
             );
             // Anchor at the key's bottom-center, rotated with it.

@@ -221,6 +221,13 @@ fn rotated_center(g: &geometry::KeyGeom) -> (f32, f32) {
 /// Primary label for a keycap: the Oryx custom label if set, else the tap action.
 fn key_text(key: &oryx::Key) -> String {
     if let Some(label) = &key.custom_label {
+        // Strip invisible emoji plumbing — variation selectors (how "⬆️"
+        // differs from "⬆"), zero-width joiners, and the keycap combiner.
+        // Fonts have no glyphs for them, so they render as tofu boxes.
+        let label: String = label
+            .chars()
+            .filter(|c| !matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{200D}' | '\u{20E3}'))
+            .collect();
         let label = label.trim();
         if !label.is_empty() {
             return label.to_owned();

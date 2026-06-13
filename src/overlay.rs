@@ -316,7 +316,20 @@ impl eframe::App for OverlayApp {
                 };
             if let Some(offset) = self.drag {
                 if let (true, Some(c)) = (button, cursor) {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(c - offset));
+                    let mut target = c - offset;
+                    // Keep the whole window within the monitor under the
+                    // cursor, so it can't be dragged off into empty space
+                    // (dragging onto an adjacent monitor still works — it
+                    // clamps to whichever monitor the cursor is over).
+                    if let Some((l, t, r, b)) =
+                        win32::monitor_rect_for_point((c.x * ppp) as i32, (c.y * ppp) as i32)
+                    {
+                        let (l, t, r, b) =
+                            (l as f32 / ppp, t as f32 / ppp, r as f32 / ppp, b as f32 / ppp);
+                        target.x = target.x.clamp(l, (r - OVERLAY_W).max(l));
+                        target.y = target.y.clamp(t, (b - OVERLAY_H).max(t));
+                    }
+                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(target));
                 } else {
                     // Drag finished: persist the spot (overrides corner
                     // docking until a corner is re-picked in the tray).
@@ -803,6 +816,9 @@ fn action_text(a: &oryx::KeyAction) -> String {
 mod win32 {
     use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
     use windows::Win32::Foundation::{COLORREF, HWND, POINT};
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
+    };
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_SHIFT};
     use windows::Win32::UI::WindowsAndMessaging::{
         GWL_EXSTYLE, GetCursorPos, GetWindowLongPtrW, LWA_ALPHA, SetLayeredWindowAttributes,
@@ -830,6 +846,24 @@ mod win32 {
         let mut p = POINT::default();
         unsafe { GetCursorPos(&mut p).ok()? };
         Some((p.x, p.y))
+    }
+
+    /// Full bounds (left, top, right, bottom, physical pixels) of the monitor
+    /// containing the given desktop point — nearest monitor if it's in a gap.
+    pub fn monitor_rect_for_point(x: i32, y: i32) -> Option<(i32, i32, i32, i32)> {
+        unsafe {
+            let mon = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
+            let mut info = MONITORINFO {
+                cbSize: core::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            if GetMonitorInfoW(mon, &mut info).as_bool() {
+                let r = info.rcMonitor;
+                Some((r.left, r.top, r.right, r.bottom))
+            } else {
+                None
+            }
+        }
     }
 
     /// NOACTIVATE: never steals focus. TOOLWINDOW minus APPWINDOW: never in

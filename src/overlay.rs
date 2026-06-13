@@ -450,6 +450,22 @@ fn label_font_size(label: &str, text: f32, letter: f32, symbol: f32) -> f32 {
     }
 }
 
+/// A few modifier/whitespace labels render small relative to how important
+/// the key is — the size tiers above don't make them legible (the ⇧ glyph
+/// sits tiny in its em box; "Ctl"/"Esc" only qualify for the text tier). Give
+/// those specific labels a fixed, larger font. `scale` matches the tier sizes
+/// (1.0 for primary labels, smaller for hold hints).
+fn emphasized_font_size(label: &str, scale: f32) -> Option<f32> {
+    Some(scale * match label {
+        "\u{21E7}" => 26.0,     // ⇧ shift
+        "Ctl" | "RCtl" => 14.5, // control
+        "\u{2423}" => 16.5,     // ␣ space
+        "Esc" => 12.0,          // escape
+        "\u{23CE}" => 16.5,     // ⏎ enter
+        _ => return None,
+    })
+}
+
 /// Parses an Oryx "#rrggbb" color.
 fn parse_hex_color(s: &str) -> Option<Color32> {
     let s = s.strip_prefix('#')?;
@@ -619,7 +635,8 @@ fn draw_board(
 
         if !label.is_empty() {
             let max_w = kw * BOARD_SCALE - 5.0;
-            let size = label_font_size(&label, 9.5, 11.5, 14.5);
+            let size = emphasized_font_size(&label, 1.0)
+                .unwrap_or_else(|| label_font_size(&label, 9.5, 11.5, 14.5));
             let mut galley =
                 key_painter.layout_no_wrap(label.clone(), FontId::proportional(size), text_color);
             if galley.size().x > max_w {
@@ -639,7 +656,10 @@ fn draw_board(
         if let Some(hold) = hold_text(key) {
             let galley = key_painter.layout_no_wrap(
                 hold.clone(),
-                FontId::proportional(label_font_size(&hold, 7.0, 8.0, 9.5)),
+                FontId::proportional(
+                    emphasized_font_size(&hold, 0.65)
+                        .unwrap_or_else(|| label_font_size(&hold, 7.0, 8.0, 9.5)),
+                ),
                 p.hold_text,
             );
             // Anchor at the key's bottom-center, rotated with it.

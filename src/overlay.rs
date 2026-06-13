@@ -109,6 +109,10 @@ pub struct OverlayApp {
     drag: Option<egui::Vec2>,
     /// Left-button state last tick, for press edge detection.
     prev_button: bool,
+    /// Overlay opacity, percent (tray setting).
+    opacity: u8,
+    /// Window-level alpha last pushed via SetLayeredWindowAttributes.
+    applied_alpha: Option<u8>,
     /// Test override (STARVIEW_FORCE_LAYER): pretend this layer is active.
     force_layer: Option<u8>,
 }
@@ -133,6 +137,8 @@ impl OverlayApp {
             hot: false,
             drag: None,
             prev_button: false,
+            opacity: settings.opacity,
+            applied_alpha: None,
             force_layer: std::env::var("STARVIEW_FORCE_LAYER")
                 .ok()
                 .and_then(|v| v.parse().ok()),
@@ -183,6 +189,7 @@ impl eframe::App for OverlayApp {
                 AppEvent::Layout(info) => self.layout = Some(info),
                 AppEvent::Settings(s) => {
                     self.always = s.pin_base;
+                    self.opacity = s.opacity;
                     let pos = s.position.map(|(x, y)| pos2(x, y));
                     if self.corner != s.corner || self.custom_pos != pos {
                         self.corner = s.corner;
@@ -298,7 +305,16 @@ impl eframe::App for OverlayApp {
         };
 
         #[cfg(windows)]
-        win32::assert_overlay_styles(frame, !interactive);
+        {
+            let alpha = (self.opacity as f32 / 100.0 * 255.0).round() as u8;
+            win32::assert_overlay_styles(
+                frame,
+                !interactive,
+                alpha,
+                self.applied_alpha != Some(alpha),
+            );
+            self.applied_alpha = Some(alpha);
+        }
 
         if self.shown {
             // Poll often enough that holding Shift over the hamburger turns
@@ -706,8 +722,15 @@ mod win32 {
     /// (winit sets these for mouse passthrough, but clobbers them on flag
     /// changes, so they're asserted here too). `click_through` is false only
     /// while the hamburger drag handle is armed (Shift held over it), so that
-    /// click lands on us instead of the window underneath.
-    pub fn assert_overlay_styles(frame: &eframe::Frame, click_through: bool) {
+    /// click lands on us instead of the window underneath. `alpha` is the
+    /// window-level opacity (composes with per-pixel alpha); `force_alpha`
+    /// pushes it even when the styles are already right.
+    pub fn assert_overlay_styles(
+        frame: &eframe::Frame,
+        click_through: bool,
+        alpha: u8,
+        force_alpha: bool,
+    ) {
         let Some(hwnd) = hwnd(frame) else { return };
         let mut want =
             (WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0 | WS_EX_LAYERED.0) as isize;
@@ -722,9 +745,11 @@ mod win32 {
             let desired = (ex | want) & !unwant;
             if desired != ex {
                 SetWindowLongPtrW(hwnd, GWL_EXSTYLE, desired);
-                // A layered window needs one SLWA call before it renders;
-                // 255 = opaque at the window level, per-pixel alpha still applies.
-                let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA);
+            }
+            // A layered window needs one SLWA call before it renders at all,
+            // so re-push the alpha whenever the styles were rewritten.
+            if desired != ex || force_alpha {
+                let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
             }
         }
     }

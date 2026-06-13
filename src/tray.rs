@@ -15,7 +15,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, TranslateMessage, WM_APP,
 };
 
-use crate::settings::{self, Corner, Settings};
+use crate::settings::{self, Corner, OPACITY_STEPS, Settings};
 use crate::updater;
 
 pub enum TrayEvent {
@@ -68,12 +68,21 @@ fn run(
     for (_, item) in &corner_items {
         corner_menu.append(item)?;
     }
+    let opacity_items: Vec<(u8, CheckMenuItem)> = OPACITY_STEPS
+        .into_iter()
+        .map(|o| (o, CheckMenuItem::new(format!("{o}%"), true, o == initial.opacity, None)))
+        .collect();
+    let opacity_menu = Submenu::new("Opacity", true);
+    for (_, item) in &opacity_items {
+        opacity_menu.append(item)?;
+    }
     let update = MenuItem::new("Up to date", false, None);
     let quit = MenuItem::new("Quit starview", true, None);
 
     let menu = Menu::new();
     menu.append(&pin)?;
     menu.append(&corner_menu)?;
+    menu.append(&opacity_menu)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&update)?;
     menu.append(&quit)?;
@@ -131,6 +140,13 @@ fn run(
                     state.position = None;
                     for (c, item) in &corner_items {
                         item.set_checked(*c == state.corner);
+                    }
+                } else if let Some((opacity, _)) =
+                    opacity_items.iter().find(|(_, item)| *event.id() == item.id())
+                {
+                    state.opacity = *opacity;
+                    for (o, item) in &opacity_items {
+                        item.set_checked(*o == state.opacity);
                     }
                 } else {
                     continue;

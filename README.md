@@ -37,10 +37,21 @@ starview [--always] [layout-hash-id] [geometry]
 A system tray icon (dark disc with a blue dot) provides runtime settings,
 persisted to `%LOCALAPPDATA%\starview\settings.json`: **Pin base layer**
 (keep the overlay up on the base layer too; `--always` forces this on for the
-session) and **Overlay corner** (which display corner to dock to; bottom
-corners leave taskbar clearance), plus **Quit**. On non-base layers, unmapped
-(transparent) keys show the base layer's label dimmed — matching QMK's
-fall-through semantics — while `KC_NO` keys stay blank.
+session), **Overlay corner** (which display corner to dock to; bottom corners
+leave taskbar clearance), **Opacity** (100–40%), and **Auto-hide after** (fade
+the overlay out after an idle interval — Never/5s/15s/30s/1m/2m/5m; a layer
+change or keypress brings it back), plus **Quit**.
+
+The overlay is click-through, so its on-panel controls are gated behind the
+Shift key to keep them out of the way: hold **Shift** and drag the hamburger
+icon (top-right of the panel) to reposition it anywhere on-screen (it won't go
+off the monitor edge, and the dragged spot persists until you pick a corner
+again); hold **Shift** and click the **✕** next to it to quit.
+
+On non-base layers, unmapped (transparent) keys show the base layer's label
+dimmed — matching QMK's fall-through semantics — while `KC_NO` keys stay blank.
+Physically held keys highlight, and the highlight fades out over ~2s after
+release.
 
 Defaults are baked in (`jmvGw` / `moonlander`) — the hash id and geometry come
 straight from your Oryx URL: `configure.zsa.io/{geometry}/layouts/{hashId}/...`.

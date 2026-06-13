@@ -15,7 +15,7 @@ use egui::{Align2, Color32, CornerRadius, FontId, Rect, pos2, vec2};
 
 use crate::hid::HidEvent;
 use crate::oryx::{self, LayoutInfo};
-use crate::settings::{Corner, Settings};
+use crate::settings::{self, Corner, Settings};
 use crate::{geometry, keycodes};
 
 /// Everything the background threads feed into the UI.
@@ -98,6 +98,17 @@ pub struct OverlayApp {
     /// Keep the overlay up on the base layer too (tray toggle / --always).
     always: bool,
     corner: Corner,
+    /// Shift-dragged position (logical points); overrides corner docking.
+    custom_pos: Option<egui::Pos2>,
+    /// Hamburger drag-handle rect from the last drawn frame, window-local
+    /// points, already expanded to a comfortable hit target.
+    burger: Option<Rect>,
+    /// Shift is held with the cursor over the hamburger (drag affordance).
+    hot: bool,
+    /// Active drag: cursor-to-window-origin offset, in points.
+    drag: Option<egui::Vec2>,
+    /// Left-button state last tick, for press edge detection.
+    prev_button: bool,
     /// Test override (STARVIEW_FORCE_LAYER): pretend this layer is active.
     force_layer: Option<u8>,
 }
@@ -117,6 +128,11 @@ impl OverlayApp {
             shown: false,
             always: settings.pin_base,
             corner: settings.corner,
+            custom_pos: settings.position.map(|(x, y)| pos2(x, y)),
+            burger: None,
+            hot: false,
+            drag: None,
+            prev_button: false,
             force_layer: std::env::var("STARVIEW_FORCE_LAYER")
                 .ok()
                 .and_then(|v| v.parse().ok()),
@@ -144,9 +160,6 @@ impl eframe::App for OverlayApp {
     /// Runs even while the window is hidden (whenever a repaint is requested —
     /// the HID watcher requests one per event), so show/hide decisions live here.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        #[cfg(windows)]
-        win32::assert_overlay_styles(frame);
-
         for event in self.events.try_iter() {
             match event {
                 AppEvent::Hid(HidEvent::Layer(idx)) => {
@@ -170,8 +183,10 @@ impl eframe::App for OverlayApp {
                 AppEvent::Layout(info) => self.layout = Some(info),
                 AppEvent::Settings(s) => {
                     self.always = s.pin_base;
-                    if self.corner != s.corner {
+                    let pos = s.position.map(|(x, y)| pos2(x, y));
+                    if self.corner != s.corner || self.custom_pos != pos {
                         self.corner = s.corner;
+                        self.custom_pos = pos;
                         self.positioned = false; // re-anchor on next tick
                     }
                 }
@@ -207,15 +222,19 @@ impl eframe::App for OverlayApp {
             }
         }
 
-        // Pin to the configured corner once the monitor size is known.
-        if !self.positioned
-            && let Some(size) = ctx.input(|i| i.viewport().monitor_size)
-        {
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(corner_pos(
-                self.corner,
-                size,
-            )));
-            self.positioned = true;
+        // Pin to the shift-dragged spot if there is one, else to the
+        // configured corner once the monitor size is known.
+        if !self.positioned {
+            if let Some(pos) = self.custom_pos {
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+                self.positioned = true;
+            } else if let Some(size) = ctx.input(|i| i.viewport().monitor_size) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(corner_pos(
+                    self.corner,
+                    size,
+                )));
+                self.positioned = true;
+            }
         }
 
         if let Some(forced) = self.force_layer {
@@ -231,13 +250,69 @@ impl eframe::App for OverlayApp {
             || self.always
             || (self.connected && self.layer != 0);
 
-        // Low-rate heartbeat so the style assert above self-heals even when
-        // no HID events arrive.
+        // Shift-drag via the panel's hamburger icon. The window is normally
+        // click-through (WS_EX_TRANSPARENT) and never receives real mouse
+        // input, so global cursor/key state is polled instead; click-through
+        // is dropped only while Shift is over the icon (or a drag is live) so
+        // that specific click can't fall through to the window underneath.
+        #[cfg(windows)]
+        let interactive = {
+            let shift = win32::shift_down();
+            let button = win32::lbutton_down();
+            let ppp = ctx.pixels_per_point();
+            let cursor = win32::cursor_pos().map(|(x, y)| pos2(x as f32 / ppp, y as f32 / ppp));
+            let window = ctx.input(|i| i.viewport().inner_rect);
+            self.hot = self.drag.is_none()
+                && shift
+                && match (cursor, window, self.burger) {
+                    (Some(c), Some(win), Some(b)) => b.translate(win.min.to_vec2()).contains(c),
+                    _ => false,
+                };
+            if let Some(offset) = self.drag {
+                if let (true, Some(c)) = (button, cursor) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(c - offset));
+                } else {
+                    // Drag finished: persist the spot (overrides corner
+                    // docking until a corner is re-picked in the tray).
+                    self.drag = None;
+                    if let Some(win) = window {
+                        self.custom_pos = Some(win.min);
+                        let mut s = settings::load();
+                        s.position = Some((win.min.x, win.min.y));
+                        settings::save(&s);
+                    }
+                }
+            } else if self.hot
+                && button
+                && !self.prev_button
+                && let (Some(c), Some(win)) = (cursor, window)
+            {
+                self.drag = Some(c - win.min);
+            }
+            self.prev_button = button;
+            if shift || self.drag.is_some() {
+                // Track the cursor smoothly while a drag is possible/live.
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            }
+            self.hot || self.drag.is_some()
+        };
+
+        #[cfg(windows)]
+        win32::assert_overlay_styles(frame, !interactive);
+
+        if self.shown {
+            // Poll often enough that holding Shift over the hamburger turns
+            // interactive before the click lands.
+            ctx.request_repaint_after(std::time::Duration::from_millis(150));
+        }
+        // Low-rate heartbeat so the style assert self-heals even when no HID
+        // events arrive.
         ctx.request_repaint_after(std::time::Duration::from_secs(1));
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if !self.shown {
+            self.burger = None;
             return;
         }
         let title = self.label();
@@ -273,12 +348,48 @@ impl eframe::App for OverlayApp {
             Corner::BottomRight => Align2::RIGHT_BOTTOM,
         };
 
-        if !keys.is_empty() && keys.len() == geometry::MOONLANDER_KEYS.len() {
-            draw_board(ui, &title, keys, base, &self.pressed, ball, align);
+        let panel = if !keys.is_empty() && keys.len() == geometry::MOONLANDER_KEYS.len() {
+            draw_board(ui, &title, keys, base, &self.pressed, ball, align)
         } else {
-            draw_name_bubble(ui, &title, align);
-        }
+            draw_name_bubble(ui, &title, align)
+        };
+        self.burger = Some(draw_burger(
+            ui.painter(),
+            panel,
+            self.hot || self.drag.is_some(),
+        ));
     }
+}
+
+/// Hamburger drag handle at the panel's top-right. Hold Shift and drag it
+/// with the left button to move the overlay. Returns the (expanded) hit rect.
+fn draw_burger(painter: &egui::Painter, panel: Rect, hot: bool) -> Rect {
+    let p = palette();
+    let rect = Rect::from_min_size(
+        pos2(panel.max.x - 15.0 - 8.0, panel.min.y + 8.0),
+        vec2(15.0, 15.0),
+    );
+    if hot {
+        painter.rect_filled(
+            rect.expand(4.0),
+            CornerRadius::same(4),
+            Color32::from_rgba_unmultiplied(110, 165, 255, 70),
+        );
+    }
+    let color = if hot {
+        p.text
+    } else {
+        Color32::from_rgba_unmultiplied(200, 205, 220, 110)
+    };
+    let lines = rect.shrink2(vec2(1.0, 3.5));
+    for t in [0.0, 0.5, 1.0] {
+        let y = lines.min.y + lines.height() * t;
+        painter.line_segment(
+            [pos2(lines.min.x, y), pos2(lines.max.x, y)],
+            egui::Stroke::new(1.5, color),
+        );
+    }
+    rect.expand(5.0)
 }
 
 /// Single characters get a larger font than multi-char text labels: letters
@@ -316,15 +427,17 @@ fn corner_pos(corner: Corner, monitor: egui::Vec2) -> egui::Pos2 {
     }
 }
 
-fn draw_name_bubble(ui: &mut egui::Ui, title: &str, align: Align2) {
+fn draw_name_bubble(ui: &mut egui::Ui, title: &str, align: Align2) -> Rect {
     let p = palette();
     let painter = ui.painter();
     let galley = painter.layout_no_wrap(title.to_owned(), FontId::proportional(24.0), p.text);
     let pad = vec2(18.0, 11.0);
-    let size = galley.size() + pad * 2.0;
+    // Extra width on the right so the hamburger handle has room.
+    let size = galley.size() + pad * 2.0 + vec2(24.0, 0.0);
     let rect = align.align_size_within_rect(size, ui.max_rect());
     painter.rect_filled(rect, CornerRadius::same(13), p.panel_bg);
     painter.galley(rect.min + pad, galley, Color32::WHITE);
+    rect
 }
 
 fn draw_board(
@@ -335,7 +448,7 @@ fn draw_board(
     pressed: &HashSet<usize>,
     ball: Option<egui::Vec2>,
     align: Align2,
-) {
+) -> Rect {
     let pad = 12.0;
     let header_h = 24.0;
     let board_size = vec2(geometry::BOARD_WIDTH_U, geometry::BOARD_HEIGHT_U) * BOARD_SCALE;
@@ -491,6 +604,7 @@ fn draw_board(
             Color32::from_rgba_unmultiplied(110, 165, 255, alpha),
         );
     }
+    rect
 }
 
 /// True when the key's tap slot falls through to lower layers (KC_TRANSPARENT
@@ -557,9 +671,10 @@ fn action_text(a: &oryx::KeyAction) -> String {
 #[cfg(windows)]
 mod win32 {
     use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
-    use windows::Win32::Foundation::{COLORREF, HWND};
+    use windows::Win32::Foundation::{COLORREF, HWND, POINT};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_SHIFT};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GWL_EXSTYLE, GetWindowLongPtrW, LWA_ALPHA, SetLayeredWindowAttributes,
+        GWL_EXSTYLE, GetCursorPos, GetWindowLongPtrW, LWA_ALPHA, SetLayeredWindowAttributes,
         SetWindowLongPtrW, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
         WS_EX_TRANSPARENT,
     };
@@ -571,15 +686,37 @@ mod win32 {
         }
     }
 
+    pub fn shift_down() -> bool {
+        unsafe { (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0 }
+    }
+
+    pub fn lbutton_down() -> bool {
+        unsafe { (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0 }
+    }
+
+    /// Cursor position in physical (per-pixel) desktop coordinates.
+    pub fn cursor_pos() -> Option<(i32, i32)> {
+        let mut p = POINT::default();
+        unsafe { GetCursorPos(&mut p).ok()? };
+        Some((p.x, p.y))
+    }
+
     /// NOACTIVATE: never steals focus. TOOLWINDOW minus APPWINDOW: never in
     /// Alt-Tab, no taskbar button. LAYERED|TRANSPARENT: clicks pass through
     /// (winit sets these for mouse passthrough, but clobbers them on flag
-    /// changes, so they're asserted here too).
-    pub fn assert_overlay_styles(frame: &eframe::Frame) {
+    /// changes, so they're asserted here too). `click_through` is false only
+    /// while the hamburger drag handle is armed (Shift held over it), so that
+    /// click lands on us instead of the window underneath.
+    pub fn assert_overlay_styles(frame: &eframe::Frame, click_through: bool) {
         let Some(hwnd) = hwnd(frame) else { return };
-        let want = (WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0 | WS_EX_LAYERED.0
-            | WS_EX_TRANSPARENT.0) as isize;
-        let unwant = WS_EX_APPWINDOW.0 as isize;
+        let mut want =
+            (WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0 | WS_EX_LAYERED.0) as isize;
+        let mut unwant = WS_EX_APPWINDOW.0 as isize;
+        if click_through {
+            want |= WS_EX_TRANSPARENT.0 as isize;
+        } else {
+            unwant |= WS_EX_TRANSPARENT.0 as isize;
+        }
         unsafe {
             let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
             let desired = (ex | want) & !unwant;
@@ -591,5 +728,4 @@ mod win32 {
             }
         }
     }
-
 }

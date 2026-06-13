@@ -39,6 +39,11 @@ pub struct Settings {
     /// Keep the overlay up on the base layer too.
     pub pin_base: bool,
     pub corner: Corner,
+    /// Custom overlay position (logical points), set by shift-dragging the
+    /// panel's hamburger icon. Overrides `corner` until a corner is re-picked.
+    pub position: Option<(f32, f32)>,
+    /// Overlay opacity, percent.
+    pub opacity: u8,
 }
 
 impl Default for Settings {
@@ -46,9 +51,14 @@ impl Default for Settings {
         Self {
             pin_base: false,
             corner: Corner::TopRight,
+            position: None,
+            opacity: 100,
         }
     }
 }
+
+/// Opacity choices offered in the tray menu.
+pub const OPACITY_STEPS: [u8; 5] = [100, 85, 70, 55, 40];
 
 fn path() -> Option<PathBuf> {
     let base = std::env::var_os("LOCALAPPDATA")?;
@@ -56,10 +66,13 @@ fn path() -> Option<PathBuf> {
 }
 
 pub fn load() -> Settings {
-    path()
+    let mut s: Settings = path()
         .and_then(|p| fs::read(p).ok())
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // A hand-edited 0 would make the overlay invisible with no way back.
+    s.opacity = s.opacity.clamp(20, 100);
+    s
 }
 
 pub fn save(settings: &Settings) {

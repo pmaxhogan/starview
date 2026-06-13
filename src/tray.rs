@@ -93,7 +93,6 @@ fn run(
 
     TRAY_THREAD.store(unsafe { GetCurrentThreadId() }, Ordering::Relaxed);
 
-    let mut state = initial;
     let mut msg = MSG::default();
     unsafe {
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -108,6 +107,10 @@ fn run(
             }
             // Menu clicks were queued by the dispatch above.
             while let Ok(event) = MenuEvent::receiver().try_recv() {
+                // Reload from disk before applying: the overlay writes the
+                // shift-dragged `position` on its own, and a stale in-memory
+                // copy here would silently clobber it.
+                let mut state = settings::load();
                 if *event.id() == pin.id() {
                     // muda already toggled the check mark.
                     state.pin_base = pin.is_checked();
@@ -124,6 +127,8 @@ fn run(
                     corner_items.iter().find(|(_, item)| *event.id() == item.id())
                 {
                     state.corner = *corner;
+                    // Picking a corner re-docks, dropping any dragged spot.
+                    state.position = None;
                     for (c, item) in &corner_items {
                         item.set_checked(*c == state.corner);
                     }

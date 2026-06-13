@@ -113,8 +113,13 @@ pub struct OverlayApp {
     /// Hamburger drag-handle rect from the last drawn frame, window-local
     /// points, already expanded to a comfortable hit target.
     burger: Option<Rect>,
+    /// X close-button rect from the last drawn frame, window-local points,
+    /// expanded to a comfortable hit target.
+    close_btn: Option<Rect>,
     /// Shift is held with the cursor over the hamburger (drag affordance).
     hot: bool,
+    /// Shift is held with the cursor over the close button.
+    close_hot: bool,
     /// Active drag: cursor-to-window-origin offset, in points.
     drag: Option<egui::Vec2>,
     /// Left-button state last tick, for press edge detection.
@@ -149,7 +154,9 @@ impl OverlayApp {
             corner: settings.corner,
             custom_pos: settings.position.map(|(x, y)| pos2(x, y)),
             burger: None,
+            close_btn: None,
             hot: false,
+            close_hot: false,
             drag: None,
             prev_button: false,
             opacity: settings.opacity,
@@ -308,12 +315,14 @@ impl eframe::App for OverlayApp {
             let ppp = ctx.pixels_per_point();
             let cursor = win32::cursor_pos().map(|(x, y)| pos2(x as f32 / ppp, y as f32 / ppp));
             let window = ctx.input(|i| i.viewport().inner_rect);
-            self.hot = self.drag.is_none()
-                && shift
-                && match (cursor, window, self.burger) {
-                    (Some(c), Some(win), Some(b)) => b.translate(win.min.to_vec2()).contains(c),
-                    _ => false,
-                };
+            // Is the cursor over a window-local control rect? (controls are
+            // stored in window-local points; the cursor is desktop-logical.)
+            let over = |r: Option<Rect>| match (cursor, window, r) {
+                (Some(c), Some(win), Some(rr)) => rr.translate(win.min.to_vec2()).contains(c),
+                _ => false,
+            };
+            self.hot = self.drag.is_none() && shift && over(self.burger);
+            self.close_hot = self.drag.is_none() && shift && over(self.close_btn);
             if let Some(offset) = self.drag {
                 if let (true, Some(c)) = (button, cursor) {
                     let mut target = c - offset;
@@ -341,19 +350,23 @@ impl eframe::App for OverlayApp {
                         settings::save(&s);
                     }
                 }
-            } else if self.hot
-                && button
-                && !self.prev_button
-                && let (Some(c), Some(win)) = (cursor, window)
-            {
-                self.drag = Some(c - win.min);
+            } else if button && !self.prev_button {
+                // Fresh left-press while a control is armed (Shift held over
+                // it): the X closes, the hamburger starts a drag.
+                if self.close_hot {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                } else if self.hot
+                    && let (Some(c), Some(win)) = (cursor, window)
+                {
+                    self.drag = Some(c - win.min);
+                }
             }
             self.prev_button = button;
             if shift || self.drag.is_some() {
                 // Track the cursor smoothly while a drag is possible/live.
                 ctx.request_repaint_after(std::time::Duration::from_millis(16));
             }
-            self.hot || self.drag.is_some()
+            self.hot || self.close_hot || self.drag.is_some()
         };
 
         #[cfg(windows)]
@@ -406,6 +419,7 @@ impl eframe::App for OverlayApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if !self.shown {
             self.burger = None;
+            self.close_btn = None;
             return;
         }
         let title = self.label();
@@ -455,22 +469,31 @@ impl eframe::App for OverlayApp {
         } else {
             draw_name_bubble(ui, &title, align)
         };
-        self.burger = Some(draw_burger(
-            ui.painter(),
-            panel,
-            self.hot || self.drag.is_some(),
-        ));
+        // Top-right controls: hamburger (Shift-drag to move) and, to its left,
+        // an X (Shift+click to quit). Both sit in the header's right margin.
+        let icon = vec2(15.0, 15.0);
+        let burger_rect =
+            Rect::from_min_size(pos2(panel.max.x - 8.0 - icon.x, panel.min.y + 8.0), icon);
+        let close_rect =
+            Rect::from_min_size(pos2(burger_rect.min.x - 10.0 - icon.x, panel.min.y + 8.0), icon);
+        draw_burger(ui.painter(), burger_rect, self.hot || self.drag.is_some());
+        draw_close(ui.painter(), close_rect, self.close_hot);
+        self.burger = Some(burger_rect.expand(5.0));
+        self.close_btn = Some(close_rect.expand(5.0));
     }
 }
 
-/// Hamburger drag handle at the panel's top-right. Hold Shift and drag it
-/// with the left button to move the overlay. Returns the (expanded) hit rect.
-fn draw_burger(painter: &egui::Painter, panel: Rect, hot: bool) -> Rect {
-    let p = palette();
-    let rect = Rect::from_min_size(
-        pos2(panel.max.x - 15.0 - 8.0, panel.min.y + 8.0),
-        vec2(15.0, 15.0),
-    );
+/// Tint of a header control glyph: highlighted when armed (Shift over it).
+fn control_color(hot: bool) -> Color32 {
+    if hot {
+        palette().text
+    } else {
+        Color32::from_rgba_unmultiplied(200, 205, 220, 110)
+    }
+}
+
+/// Soft accent backing drawn behind a header control while it's armed.
+fn control_bg(painter: &egui::Painter, rect: Rect, hot: bool) {
     if hot {
         painter.rect_filled(
             rect.expand(4.0),
@@ -478,11 +501,12 @@ fn draw_burger(painter: &egui::Painter, panel: Rect, hot: bool) -> Rect {
             Color32::from_rgba_unmultiplied(110, 165, 255, 70),
         );
     }
-    let color = if hot {
-        p.text
-    } else {
-        Color32::from_rgba_unmultiplied(200, 205, 220, 110)
-    };
+}
+
+/// Hamburger drag handle — hold Shift and drag it with the left button.
+fn draw_burger(painter: &egui::Painter, rect: Rect, hot: bool) {
+    control_bg(painter, rect, hot);
+    let color = control_color(hot);
     let lines = rect.shrink2(vec2(1.0, 3.5));
     for t in [0.0, 0.5, 1.0] {
         let y = lines.min.y + lines.height() * t;
@@ -491,7 +515,18 @@ fn draw_burger(painter: &egui::Painter, panel: Rect, hot: bool) -> Rect {
             egui::Stroke::new(1.5, color),
         );
     }
-    rect.expand(5.0)
+}
+
+/// X close button — Shift+click quits starview.
+fn draw_close(painter: &egui::Painter, rect: Rect, hot: bool) {
+    control_bg(painter, rect, hot);
+    let color = control_color(hot);
+    let x = rect.shrink(2.0);
+    painter.line_segment([x.min, x.max], egui::Stroke::new(1.5, color));
+    painter.line_segment(
+        [pos2(x.min.x, x.max.y), pos2(x.max.x, x.min.y)],
+        egui::Stroke::new(1.5, color),
+    );
 }
 
 /// Single characters get a larger font than multi-char text labels: letters
@@ -550,8 +585,8 @@ fn draw_name_bubble(ui: &mut egui::Ui, title: &str, align: Align2) -> Rect {
     let painter = ui.painter();
     let galley = painter.layout_no_wrap(title.to_owned(), FontId::proportional(24.0), p.text);
     let pad = vec2(18.0, 11.0);
-    // Extra width on the right so the hamburger handle has room.
-    let size = galley.size() + pad * 2.0 + vec2(24.0, 0.0);
+    // Extra width on the right so the close + hamburger controls have room.
+    let size = galley.size() + pad * 2.0 + vec2(56.0, 0.0);
     let rect = align.align_size_within_rect(size, ui.max_rect());
     painter.rect_filled(rect, CornerRadius::same(13), p.panel_bg);
     painter.galley(rect.min + pad, galley, Color32::WHITE);

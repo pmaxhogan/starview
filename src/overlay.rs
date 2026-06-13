@@ -100,6 +100,8 @@ pub struct OverlayApp {
     released: HashMap<usize, std::time::Instant>,
     /// Smoothed trackball motion vector (unit-clamped); decays toward zero.
     ball: egui::Vec2,
+    /// Recent smoothed ball vectors (oldest first) for the motion trail.
+    ball_trail: Vec<egui::Vec2>,
     /// Whether a ZSA pointing device has ever produced motion.
     ball_seen: bool,
     /// Previous `logic` tick, for time-based (tick-rate-independent) decay.
@@ -147,6 +149,7 @@ impl OverlayApp {
             pressed: HashSet::new(),
             released: HashMap::new(),
             ball: egui::Vec2::ZERO,
+            ball_trail: Vec::new(),
             ball_seen: false,
             last_tick: None,
             connected: false,
@@ -268,6 +271,20 @@ impl eframe::App for OverlayApp {
             } else {
                 self.ball = egui::Vec2::ZERO;
             }
+        }
+
+        // Motion trail: record the dot's recent path (capped), so the renderer
+        // can draw a fading comet streak. Cleared once the ball settles back
+        // to center, where every sample would sit anyway.
+        const TRAIL_LEN: usize = 16;
+        if self.ball != egui::Vec2::ZERO {
+            self.ball_trail.push(self.ball);
+            let overflow = self.ball_trail.len().saturating_sub(TRAIL_LEN);
+            if overflow > 0 {
+                self.ball_trail.drain(0..overflow);
+            }
+        } else {
+            self.ball_trail.clear();
         }
 
         // Drop fully-faded afterglows; keep animating while any remain.
@@ -466,6 +483,7 @@ impl eframe::App for OverlayApp {
                 &self.pressed,
                 &self.released,
                 ball,
+                &self.ball_trail,
                 align,
             )
         } else {
@@ -603,6 +621,7 @@ fn draw_board(
     pressed: &HashSet<usize>,
     released: &HashMap<usize, std::time::Instant>,
     ball: Option<egui::Vec2>,
+    trail: &[egui::Vec2],
     align: Align2,
 ) -> Rect {
     let now = std::time::Instant::now();
@@ -773,11 +792,35 @@ fn draw_board(
             radius,
             egui::Stroke::new(1.2, Color32::from_rgba_unmultiplied(255, 255, 255, 60)),
         );
+        // Map a smoothed ball vector to its dot position in the ring. Soft
+        // response curve: moderate rolls already swing well out, full speed
+        // brings the dot's edge to the ring.
+        let dot_pos = |v: egui::Vec2| {
+            let activity = v.length().min(1.0);
+            let deflection = activity.powf(0.6) * radius * 0.68;
+            center + if v.length() > 0.0 { v / v.length() } else { v } * deflection
+        };
+        let dot = dot_pos(ball);
+
+        // Comet trail: a fading streak through the dot's recent path, drawn
+        // oldest (faint, thin) to newest, ending at the live dot.
+        let path: Vec<egui::Pos2> = trail.iter().map(|v| dot_pos(*v)).chain([dot]).collect();
+        if path.len() >= 2 {
+            let segs = (path.len() - 1) as f32;
+            for (i, w) in path.windows(2).enumerate() {
+                let f = (i + 1) as f32 / segs; // 0..1 toward the head
+                painter.line_segment(
+                    [w[0], w[1]],
+                    egui::Stroke::new(
+                        0.8 + 2.4 * f,
+                        Color32::from_rgba_unmultiplied(110, 165, 255, (120.0 * f) as u8),
+                    ),
+                );
+            }
+        }
+
+        // Head dot: brighter the faster the ball is moving.
         let activity = ball.length().min(1.0);
-        // Soft response curve: moderate rolls already swing well out, full
-        // speed brings the dot's edge to the ring.
-        let deflection = activity.powf(0.6) * radius * 0.68;
-        let dot = center + if activity > 0.0 { ball / ball.length() } else { ball } * deflection;
         let alpha = (70.0 + 185.0 * activity) as u8;
         painter.circle_filled(
             dot,

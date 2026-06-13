@@ -44,6 +44,8 @@ pub struct Settings {
     pub position: Option<(f32, f32)>,
     /// Overlay opacity, percent.
     pub opacity: u8,
+    /// Seconds of inactivity before the overlay fades away (0 = never).
+    pub fade_secs: u16,
 }
 
 impl Default for Settings {
@@ -53,12 +55,24 @@ impl Default for Settings {
             corner: Corner::TopRight,
             position: None,
             opacity: 100,
+            fade_secs: 0,
         }
     }
 }
 
 /// Opacity choices offered in the tray menu.
 pub const OPACITY_STEPS: [u8; 5] = [100, 85, 70, 55, 40];
+
+/// Auto-fade choices offered in the tray menu: (label, seconds); 0 = never.
+pub const FADE_STEPS: [(&str, u16); 7] = [
+    ("Never", 0),
+    ("5 seconds", 5),
+    ("15 seconds", 15),
+    ("30 seconds", 30),
+    ("1 minute", 60),
+    ("2 minutes", 120),
+    ("5 minutes", 300),
+];
 
 fn path() -> Option<PathBuf> {
     let base = std::env::var_os("LOCALAPPDATA")?;

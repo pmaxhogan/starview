@@ -123,6 +123,10 @@ pub struct OverlayApp {
     opacity: u8,
     /// Window-level alpha last pushed via SetLayeredWindowAttributes.
     applied_alpha: Option<u8>,
+    /// Inactivity before the overlay fades away (None = never).
+    fade_after: Option<std::time::Duration>,
+    /// Last layer change or key press, for the auto-fade timer.
+    last_activity: std::time::Instant,
     /// Test override (STARVIEW_FORCE_LAYER): pretend this layer is active.
     force_layer: Option<u8>,
 }
@@ -150,6 +154,9 @@ impl OverlayApp {
             prev_button: false,
             opacity: settings.opacity,
             applied_alpha: None,
+            fade_after: (settings.fade_secs > 0)
+                .then(|| std::time::Duration::from_secs(settings.fade_secs as u64)),
+            last_activity: std::time::Instant::now(),
             force_layer: std::env::var("STARVIEW_FORCE_LAYER")
                 .ok()
                 .and_then(|v| v.parse().ok()),
@@ -180,10 +187,17 @@ impl eframe::App for OverlayApp {
         for event in self.events.try_iter() {
             match event {
                 AppEvent::Hid(HidEvent::Layer(idx)) => {
+                    // Only a genuine change is activity — the watcher re-emits
+                    // the current layer on each idle re-pair, which must not
+                    // keep resetting the auto-fade timer.
+                    if idx != self.layer {
+                        self.last_activity = std::time::Instant::now();
+                    }
                     self.layer = idx;
                     self.connected = true;
                 }
                 AppEvent::Hid(HidEvent::KeyDown { row, col }) => {
+                    self.last_activity = std::time::Instant::now();
                     if let Some(i) = geometry::key_index_for_matrix(row, col) {
                         self.pressed.insert(i);
                         self.released.remove(&i);
@@ -204,6 +218,10 @@ impl eframe::App for OverlayApp {
                 AppEvent::Settings(s) => {
                     self.always = s.pin_base;
                     self.opacity = s.opacity;
+                    self.fade_after = (s.fade_secs > 0)
+                        .then(|| std::time::Duration::from_secs(s.fade_secs as u64));
+                    // Re-show at full opacity and restart the timer on change.
+                    self.last_activity = std::time::Instant::now();
                     let pos = s.position.map(|(x, y)| pos2(x, y));
                     if self.corner != s.corner || self.custom_pos != pos {
                         self.corner = s.corner;
@@ -327,7 +345,32 @@ impl eframe::App for OverlayApp {
 
         #[cfg(windows)]
         {
-            let alpha = (self.opacity as f32 / 100.0 * 255.0).round() as u8;
+            // Auto-fade: once idle past the timeout, ramp alpha to zero over a
+            // short fade. Activity (layer change / keypress / drag) resets the
+            // timer and snaps back to full. Never fades in forced mode.
+            const FADE_SECS: f32 = 0.5;
+            if interactive {
+                self.last_activity = now;
+            }
+            let fade = match self.fade_after {
+                Some(timeout) if self.force_layer.is_none() => {
+                    let idle = now.duration_since(self.last_activity);
+                    if idle < timeout {
+                        // Wake right when the timeout elapses to start fading.
+                        ctx.request_repaint_after(timeout - idle);
+                        1.0
+                    } else {
+                        let into = (idle - timeout).as_secs_f32();
+                        let f = (1.0 - into / FADE_SECS).clamp(0.0, 1.0);
+                        if f > 0.0 {
+                            ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                        }
+                        f
+                    }
+                }
+                _ => 1.0,
+            };
+            let alpha = (self.opacity as f32 / 100.0 * 255.0 * fade).round() as u8;
             win32::assert_overlay_styles(
                 frame,
                 !interactive,

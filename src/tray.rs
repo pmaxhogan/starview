@@ -15,7 +15,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, TranslateMessage, WM_APP,
 };
 
-use crate::settings::{self, Corner, OPACITY_STEPS, Settings};
+use crate::settings::{self, Corner, FADE_STEPS, OPACITY_STEPS, Settings};
 use crate::updater;
 
 pub enum TrayEvent {
@@ -76,6 +76,16 @@ fn run(
     for (_, item) in &opacity_items {
         opacity_menu.append(item)?;
     }
+    let fade_items: Vec<(u16, CheckMenuItem)> = FADE_STEPS
+        .into_iter()
+        .map(|(label, secs)| {
+            (secs, CheckMenuItem::new(label, true, secs == initial.fade_secs, None))
+        })
+        .collect();
+    let fade_menu = Submenu::new("Auto-hide after", true);
+    for (_, item) in &fade_items {
+        fade_menu.append(item)?;
+    }
     let update = MenuItem::new("Up to date", false, None);
     let quit = MenuItem::new("Quit starview", true, None);
 
@@ -83,6 +93,7 @@ fn run(
     menu.append(&pin)?;
     menu.append(&corner_menu)?;
     menu.append(&opacity_menu)?;
+    menu.append(&fade_menu)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&update)?;
     menu.append(&quit)?;
@@ -147,6 +158,13 @@ fn run(
                     state.opacity = *opacity;
                     for (o, item) in &opacity_items {
                         item.set_checked(*o == state.opacity);
+                    }
+                } else if let Some((secs, _)) =
+                    fade_items.iter().find(|(_, item)| *event.id() == item.id())
+                {
+                    state.fade_secs = *secs;
+                    for (s, item) in &fade_items {
+                        item.set_checked(*s == state.fade_secs);
                     }
                 } else {
                     continue;

@@ -6,7 +6,7 @@
 //! wholesale on its own flag changes, so the styles are re-asserted every
 //! `logic` tick (a no-op compare once stable).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::Receiver;
 
 use eframe::egui;
@@ -37,6 +37,14 @@ pub const OVERLAY_H: f32 = 272.0;
 const SCREEN_MARGIN: f32 = 12.0;
 /// Rendered size of one key unit, in logical points.
 const BOARD_SCALE: f32 = 26.0;
+
+/// Window-level alpha for a key held down right now.
+const HELD_ALPHA: u8 = 150;
+/// Alpha a key's highlight starts at the instant it's released — softer than
+/// held — then fades linearly to zero over `AFTERGLOW_SECS`.
+const RELEASED_ALPHA: u8 = 95;
+/// How long a released key keeps glowing before it's fully faded out.
+const AFTERGLOW_SECS: f32 = 1.8;
 
 // rgba(16,18,28) at ~78% opacity, stored premultiplied.
 const PANEL_BG: Color32 = Color32::from_rgba_premultiplied(13, 14, 22, 200);
@@ -86,6 +94,8 @@ pub struct OverlayApp {
     layer: u8,
     /// Oryx key indices currently held down on the physical board.
     pressed: HashSet<usize>,
+    /// Recently released keys -> release time; they afterglow and fade out.
+    released: HashMap<usize, std::time::Instant>,
     /// Smoothed trackball motion vector (unit-clamped); decays toward zero.
     ball: egui::Vec2,
     /// Whether a ZSA pointing device has ever produced motion.
@@ -124,6 +134,7 @@ impl OverlayApp {
             layout,
             layer: 0,
             pressed: HashSet::new(),
+            released: HashMap::new(),
             ball: egui::Vec2::ZERO,
             ball_seen: false,
             last_tick: None,
@@ -175,16 +186,19 @@ impl eframe::App for OverlayApp {
                 AppEvent::Hid(HidEvent::KeyDown { row, col }) => {
                     if let Some(i) = geometry::key_index_for_matrix(row, col) {
                         self.pressed.insert(i);
+                        self.released.remove(&i);
                     }
                 }
                 AppEvent::Hid(HidEvent::KeyUp { row, col }) => {
                     if let Some(i) = geometry::key_index_for_matrix(row, col) {
                         self.pressed.remove(&i);
+                        self.released.insert(i, std::time::Instant::now());
                     }
                 }
                 AppEvent::Hid(HidEvent::Disconnected) => {
                     self.connected = false;
                     self.pressed.clear();
+                    self.released.clear();
                 }
                 AppEvent::Layout(info) => self.layout = Some(info),
                 AppEvent::Settings(s) => {
@@ -227,6 +241,13 @@ impl eframe::App for OverlayApp {
             } else {
                 self.ball = egui::Vec2::ZERO;
             }
+        }
+
+        // Drop fully-faded afterglows; keep animating while any remain.
+        self.released
+            .retain(|_, t| now.duration_since(*t).as_secs_f32() < AFTERGLOW_SECS);
+        if !self.released.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
         }
 
         // Pin to the shift-dragged spot if there is one, else to the
@@ -365,7 +386,16 @@ impl eframe::App for OverlayApp {
         };
 
         let panel = if !keys.is_empty() && keys.len() == geometry::MOONLANDER_KEYS.len() {
-            draw_board(ui, &title, keys, base, &self.pressed, ball, align)
+            draw_board(
+                ui,
+                &title,
+                keys,
+                base,
+                &self.pressed,
+                &self.released,
+                ball,
+                align,
+            )
         } else {
             draw_name_bubble(ui, &title, align)
         };
@@ -462,9 +492,11 @@ fn draw_board(
     keys: &[oryx::Key],
     base: Option<&[oryx::Key]>,
     pressed: &HashSet<usize>,
+    released: &HashMap<usize, std::time::Instant>,
     ball: Option<egui::Vec2>,
     align: Align2,
 ) -> Rect {
+    let now = std::time::Instant::now();
     let pad = 12.0;
     let header_h = 24.0;
     let board_size = vec2(geometry::BOARD_WIDTH_U, geometry::BOARD_HEIGHT_U) * BOARD_SCALE;
@@ -533,14 +565,24 @@ fn draw_board(
             label = key_text(base_key);
             inherited = !label.is_empty();
         }
-        let fill = if pressed.contains(&i) {
-            // Physically held right now — accent highlight.
-            Color32::from_rgba_unmultiplied(110, 165, 255, 150)
-        } else if label.is_empty() || inherited {
+        let base_fill = if label.is_empty() || inherited {
             p.key_blank
         } else {
             p.key_fill
         };
+        // Accent highlight: full alpha while physically held, then fading
+        // linearly to nothing over AFTERGLOW_SECS after release. Painted as an
+        // overlay on the base fill so it reveals the normal key as it fades.
+        let accent_alpha = if pressed.contains(&i) {
+            HELD_ALPHA
+        } else if let Some(t) = released.get(&i) {
+            let frac = 1.0 - now.duration_since(*t).as_secs_f32() / AFTERGLOW_SECS;
+            (frac.clamp(0.0, 1.0) * RELEASED_ALPHA as f32).round() as u8
+        } else {
+            0
+        };
+        let accent = (accent_alpha > 0)
+            .then(|| Color32::from_rgba_unmultiplied(110, 165, 255, accent_alpha));
         let text_color = if inherited { p.text_inherited } else { p.text };
         // Keys with an Oryx LED color get a border in that color
         // (#000000 means the LED is off).
@@ -552,16 +594,26 @@ fn draw_board(
             .map(|c| egui::Stroke::new(1.5, c));
         if geom.rot_deg == 0.0 {
             let kr = Rect::from_min_max(corners[0], corners[2]);
-            painter.rect_filled(kr, CornerRadius::same(4), fill);
+            painter.rect_filled(kr, CornerRadius::same(4), base_fill);
+            if let Some(accent) = accent {
+                painter.rect_filled(kr, CornerRadius::same(4), accent);
+            }
             if let Some(stroke) = border {
                 painter.rect_stroke(kr, CornerRadius::same(4), stroke, egui::StrokeKind::Inside);
             }
         } else {
             painter.add(egui::Shape::convex_polygon(
                 corners.to_vec(),
-                fill,
+                base_fill,
                 border.unwrap_or(egui::Stroke::NONE),
             ));
+            if let Some(accent) = accent {
+                painter.add(egui::Shape::convex_polygon(
+                    corners.to_vec(),
+                    accent,
+                    egui::Stroke::NONE,
+                ));
+            }
         }
         let key_painter = painter.with_clip_rect(Rect::from_points(&corners));
 

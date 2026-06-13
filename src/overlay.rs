@@ -46,8 +46,10 @@ const RELEASED_ALPHA: u8 = 95;
 /// How long a released key keeps glowing before it's fully faded out.
 const AFTERGLOW_SECS: f32 = 1.8;
 
-// rgba(16,18,28) at ~78% opacity, stored premultiplied.
-const PANEL_BG: Color32 = Color32::from_rgba_premultiplied(13, 14, 22, 200);
+// rgba(16,18,28), fully opaque: the tray "Opacity" control (window-level
+// alpha) fades the whole overlay down from here, so the panel must start
+// solid for "100%" to actually read as opaque.
+const PANEL_BG: Color32 = Color32::from_rgb(16, 18, 28);
 const TEXT_BRIGHT: Color32 = Color32::from_rgb(240, 240, 255);
 
 /// Theme colors; HDR mode swaps to a high-contrast variant because SDR
@@ -69,7 +71,7 @@ fn palette() -> Palette {
     let hdr = false;
     if hdr {
         Palette {
-            panel_bg: Color32::from_rgba_unmultiplied(16, 18, 28, 246),
+            panel_bg: Color32::from_rgb(16, 18, 28),
             text: Color32::WHITE,
             text_inherited: Color32::from_rgba_unmultiplied(225, 228, 240, 200),
             hold_text: Color32::from_rgba_unmultiplied(225, 228, 250, 255),

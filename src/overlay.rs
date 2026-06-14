@@ -44,7 +44,7 @@ const HELD_ALPHA: u8 = 150;
 /// held — then fades linearly to zero over `AFTERGLOW_SECS`.
 const RELEASED_ALPHA: u8 = 95;
 /// How long a released key keeps glowing before it's fully faded out.
-const AFTERGLOW_SECS: f32 = 1.8;
+const AFTERGLOW_SECS: f32 = 3.0;
 
 // rgba(16,18,28), fully opaque: the tray "Opacity" control (window-level
 // alpha) fades the whole overlay down from here, so the panel must start

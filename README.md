@@ -52,7 +52,7 @@ again); hold **Shift** and click the **✕** next to it to quit.
 
 On non-base layers, unmapped (transparent) keys show the base layer's label
 dimmed — matching QMK's fall-through semantics — while `KC_NO` keys stay blank.
-Physically held keys highlight, and the highlight fades out over ~2s after
+Physically held keys highlight, and the highlight fades out over ~3s after
 release.
 
 Defaults are baked in (`jmvGw` / `moonlander`) — the hash id and geometry come

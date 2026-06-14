@@ -46,6 +46,8 @@ pub struct Settings {
     pub opacity: u8,
     /// Seconds of inactivity before the overlay fades away (0 = never).
     pub fade_secs: u16,
+    /// Color pressed/afterglow key highlights as a moving rainbow.
+    pub rainbow: bool,
 }
 
 impl Default for Settings {
@@ -56,6 +58,7 @@ impl Default for Settings {
             position: None,
             opacity: 100,
             fade_secs: 0,
+            rainbow: false,
         }
     }
 }

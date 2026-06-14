@@ -40,7 +40,9 @@ persisted to `%LOCALAPPDATA%\starview\settings.json`: **Pin base layer**
 session), **Overlay corner** (which display corner to dock to; bottom corners
 leave taskbar clearance), **Opacity** (100–40%), and **Auto-hide after** (fade
 the overlay out after an idle interval — Never/5s/15s/30s/1m/2m/5m; a layer
-change or keypress brings it back), plus **Quit**.
+change or keypress brings it back), and **Rainbow key ghosts** (color the
+pressed/afterglow key highlights as a rainbow that sweeps across the board),
+plus **Quit**.
 
 The overlay is click-through, so its on-panel controls are gated behind the
 Shift key to keep them out of the way: hold **Shift** and drag the hamburger

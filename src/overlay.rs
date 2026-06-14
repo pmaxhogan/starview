@@ -45,6 +45,9 @@ const HELD_ALPHA: u8 = 150;
 const RELEASED_ALPHA: u8 = 95;
 /// How long a released key keeps glowing before it's fully faded out.
 const AFTERGLOW_SECS: f32 = 3.0;
+/// Hue cycles per second for rainbow mode (full spectrum every ~8s), so a
+/// press a second later lands on a clearly different color.
+const RAINBOW_SPEED: f32 = 0.12;
 
 // rgba(16,18,28), fully opaque: the tray "Opacity" control (window-level
 // alpha) fades the whole overlay down from here, so the panel must start
@@ -138,8 +141,11 @@ pub struct OverlayApp {
     last_activity: std::time::Instant,
     /// Rainbow-color the key ghosts (tray toggle).
     rainbow: bool,
-    /// Process start, for the rainbow wave's time phase.
+    /// Process start, for the rainbow's time phase.
     start: std::time::Instant,
+    /// Hue (0..1) captured for each lit key at the moment it was pressed, so
+    /// keys pressed together share a color and the hue advances over time.
+    key_hue: HashMap<usize, f32>,
     /// Test override (STARVIEW_FORCE_LAYER): pretend this layer is active.
     force_layer: Option<u8>,
 }
@@ -175,6 +181,7 @@ impl OverlayApp {
             last_activity: std::time::Instant::now(),
             rainbow: settings.rainbow,
             start: std::time::Instant::now(),
+            key_hue: HashMap::new(),
             force_layer: std::env::var("STARVIEW_FORCE_LAYER")
                 .ok()
                 .and_then(|v| v.parse().ok()),
@@ -219,6 +226,11 @@ impl eframe::App for OverlayApp {
                     if let Some(i) = geometry::key_index_for_matrix(row, col) {
                         self.pressed.insert(i);
                         self.released.remove(&i);
+                        // Capture the current rainbow hue so this key (and its
+                        // afterglow) keeps the color of the moment it was hit.
+                        let phase =
+                            (self.start.elapsed().as_secs_f32() * RAINBOW_SPEED).rem_euclid(1.0);
+                        self.key_hue.insert(i, phase);
                     }
                 }
                 AppEvent::Hid(HidEvent::KeyUp { row, col }) => {
@@ -231,6 +243,7 @@ impl eframe::App for OverlayApp {
                     self.connected = false;
                     self.pressed.clear();
                     self.released.clear();
+                    self.key_hue.clear();
                 }
                 AppEvent::Layout(info) => self.layout = Some(info),
                 AppEvent::Settings(s) => {
@@ -300,6 +313,9 @@ impl eframe::App for OverlayApp {
         if !self.released.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_millis(30));
         }
+        // Drop captured hues for keys that are no longer lit.
+        self.key_hue
+            .retain(|i, _| self.pressed.contains(i) || self.released.contains_key(i));
 
         // Pin to the shift-dragged spot if there is one, else to the
         // configured corner once the monitor size is known.
@@ -328,12 +344,6 @@ impl eframe::App for OverlayApp {
         self.shown = self.force_layer.is_some()
             || self.always
             || (self.connected && self.layer != 0);
-
-        // Rainbow wave is time-animated: keep repainting while lit keys exist
-        // (afterglow already self-animates; this covers steadily-held keys).
-        if self.rainbow && self.shown && !self.pressed.is_empty() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(33));
-        }
 
         // Shift-drag via the panel's hamburger icon. The window is normally
         // click-through (WS_EX_TRANSPARENT) and never receives real mouse
@@ -487,8 +497,8 @@ impl eframe::App for OverlayApp {
             Corner::BottomRight => Align2::RIGHT_BOTTOM,
         };
 
-        // When rainbow mode is on, pass the elapsed time so the hue wave drifts.
-        let rainbow = self.rainbow.then(|| self.start.elapsed().as_secs_f32());
+        // When rainbow mode is on, pass the per-key captured hues.
+        let key_hue = self.rainbow.then_some(&self.key_hue);
         let panel = if !keys.is_empty() && keys.len() == geometry::MOONLANDER_KEYS.len() {
             draw_board(
                 ui,
@@ -499,7 +509,7 @@ impl eframe::App for OverlayApp {
                 &self.released,
                 ball,
                 &self.ball_trail,
-                rainbow,
+                key_hue,
                 align,
             )
         } else {
@@ -594,34 +604,38 @@ fn emphasized_font_size(label: &str, scale: f32) -> Option<f32> {
 }
 
 /// Color for a pressed/afterglow key ghost. Normally the fixed blue accent;
-/// in rainbow mode the hue sweeps across the board (by key x position) and
-/// drifts over time, at the given alpha.
-fn ghost_color(rainbow: Option<f32>, geom: &geometry::KeyGeom, alpha: u8) -> Color32 {
-    match rainbow {
-        Some(t) => {
-            let hue = geom.x / geometry::BOARD_WIDTH_U + t * 0.08;
-            let (r, g, b) = hsv_rgb(hue, 0.85, 1.0);
+/// in rainbow mode the key's hue captured at press time (HSL with a fixed
+/// lightness so every hue reads at the same brightness — HSV would make
+/// yellow/cyan glow far brighter), at the given alpha.
+fn ghost_color(key_hue: Option<&HashMap<usize, f32>>, i: usize, alpha: u8) -> Color32 {
+    match key_hue.and_then(|m| m.get(&i)) {
+        Some(&hue) => {
+            let (r, g, b) = hsl_rgb(hue, 0.85, 0.62);
             Color32::from_rgba_unmultiplied(r, g, b, alpha)
         }
         None => Color32::from_rgba_unmultiplied(110, 165, 255, alpha),
     }
 }
 
-/// HSV (each 0..1, hue wraps) to sRGB bytes.
-fn hsv_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
+/// HSL (each 0..1, hue wraps) to sRGB bytes.
+fn hsl_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
     let h = h.rem_euclid(1.0) * 6.0;
-    let i = h.floor();
-    let f = h - i;
-    let (p, q, t) = (v * (1.0 - s), v * (1.0 - s * f), v * (1.0 - s * (1.0 - f)));
-    let (r, g, b) = match i as i32 % 6 {
-        0 => (v, t, p),
-        1 => (q, v, p),
-        2 => (p, v, t),
-        3 => (p, q, v),
-        4 => (t, p, v),
-        _ => (v, p, q),
+    let x = c * (1.0 - (h % 2.0 - 1.0).abs());
+    let (r, g, b) = match h as i32 % 6 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
     };
-    ((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
+    let m = l - c / 2.0;
+    (
+        ((r + m) * 255.0) as u8,
+        ((g + m) * 255.0) as u8,
+        ((b + m) * 255.0) as u8,
+    )
 }
 
 /// Parses an Oryx "#rrggbb" color.
@@ -669,7 +683,7 @@ fn draw_board(
     released: &HashMap<usize, std::time::Instant>,
     ball: Option<egui::Vec2>,
     trail: &[egui::Vec2],
-    rainbow: Option<f32>,
+    key_hue: Option<&HashMap<usize, f32>>,
     align: Align2,
 ) -> Rect {
     let now = std::time::Instant::now();
@@ -757,7 +771,7 @@ fn draw_board(
         } else {
             0
         };
-        let accent = (accent_alpha > 0).then(|| ghost_color(rainbow, geom, accent_alpha));
+        let accent = (accent_alpha > 0).then(|| ghost_color(key_hue, i, accent_alpha));
         let text_color = if inherited { p.text_inherited } else { p.text };
         // Keys with an Oryx LED color get a border in that color
         // (#000000 means the LED is off).

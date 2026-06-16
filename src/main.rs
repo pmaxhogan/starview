@@ -8,6 +8,7 @@ mod keycodes;
 mod oryx;
 mod overlay;
 mod settings;
+mod stats;
 #[cfg(windows)]
 mod trackball;
 #[cfg(windows)]
@@ -58,6 +59,8 @@ fn main() -> eframe::Result {
 
     let mut cfg = settings::load();
     cfg.pin_base |= always;
+
+    let stats = stats::load();
 
     let layout = match oryx::load_layout(&layout_id, &geometry) {
         Ok(info) => {
@@ -143,7 +146,7 @@ fn main() -> eframe::Result {
                 })
                 .expect("failed to spawn oryx refresh thread");
 
-            Ok(Box::new(overlay::OverlayApp::new(rx, layout, cfg)))
+            Ok(Box::new(overlay::OverlayApp::new(rx, layout, cfg, stats)))
         }),
     )
 }

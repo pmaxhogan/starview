@@ -48,6 +48,8 @@ pub struct Settings {
     pub fade_secs: u16,
     /// Color pressed/afterglow key highlights as a moving rainbow.
     pub rainbow: bool,
+    /// Tint each key by its lifetime press count (a usage heatmap).
+    pub heatmap: bool,
 }
 
 impl Default for Settings {
@@ -59,6 +61,7 @@ impl Default for Settings {
             opacity: 100,
             fade_secs: 0,
             rainbow: false,
+            heatmap: false,
         }
     }
 }

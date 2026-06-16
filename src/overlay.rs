@@ -16,6 +16,7 @@ use egui::{Align2, Color32, CornerRadius, FontId, Rect, pos2, vec2};
 use crate::hid::HidEvent;
 use crate::oryx::{self, LayoutInfo};
 use crate::settings::{self, Corner, Settings};
+use crate::stats::{self, Stats};
 use crate::{geometry, keycodes};
 
 /// Everything the background threads feed into the UI.
@@ -148,10 +149,23 @@ pub struct OverlayApp {
     key_hue: HashMap<usize, f32>,
     /// Test override (STARVIEW_FORCE_LAYER): pretend this layer is active.
     force_layer: Option<u8>,
+    /// Lifetime per-key press counts; drives the heatmap + total counter.
+    stats: Stats,
+    /// Tint each key by its press count (tray toggle).
+    heatmap: bool,
+    /// Press counts changed since the last disk write.
+    stats_dirty: bool,
+    /// Last time `stats` was flushed to disk (debounces rapid typing).
+    stats_saved: std::time::Instant,
 }
 
 impl OverlayApp {
-    pub fn new(events: Receiver<AppEvent>, layout: Option<LayoutInfo>, settings: Settings) -> Self {
+    pub fn new(
+        events: Receiver<AppEvent>,
+        layout: Option<LayoutInfo>,
+        settings: Settings,
+        stats: Stats,
+    ) -> Self {
         Self {
             events,
             layout,
@@ -185,6 +199,10 @@ impl OverlayApp {
             force_layer: std::env::var("STARVIEW_FORCE_LAYER")
                 .ok()
                 .and_then(|v| v.parse().ok()),
+            stats,
+            heatmap: settings.heatmap,
+            stats_dirty: false,
+            stats_saved: std::time::Instant::now(),
         }
     }
 
@@ -226,6 +244,9 @@ impl eframe::App for OverlayApp {
                     if let Some(i) = geometry::key_index_for_matrix(row, col) {
                         self.pressed.insert(i);
                         self.released.remove(&i);
+                        // Tally the lifetime press count (heatmap + counter).
+                        self.stats.record(i);
+                        self.stats_dirty = true;
                         // Capture the current rainbow hue so this key (and its
                         // afterglow) keeps the color of the moment it was hit.
                         let phase =
@@ -252,6 +273,7 @@ impl eframe::App for OverlayApp {
                     self.fade_after = (s.fade_secs > 0)
                         .then(|| std::time::Duration::from_secs(s.fade_secs as u64));
                     self.rainbow = s.rainbow;
+                    self.heatmap = s.heatmap;
                     // Re-show at full opacity and restart the timer on change.
                     self.last_activity = std::time::Instant::now();
                     let pos = s.position.map(|(x, y)| pos2(x, y));
@@ -316,6 +338,21 @@ impl eframe::App for OverlayApp {
         // Drop captured hues for keys that are no longer lit.
         self.key_hue
             .retain(|i, _| self.pressed.contains(i) || self.released.contains_key(i));
+
+        // Flush press counts to disk, debounced so a burst of typing writes
+        // once rather than per keystroke. on_exit catches anything still dirty.
+        const STATS_SAVE_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
+        if self.stats_dirty {
+            let since = now.duration_since(self.stats_saved);
+            if since >= STATS_SAVE_AFTER {
+                stats::save(&self.stats);
+                self.stats_dirty = false;
+                self.stats_saved = now;
+            } else {
+                // Make sure the flush actually fires even if typing stops.
+                ctx.request_repaint_after(STATS_SAVE_AFTER - since);
+            }
+        }
 
         // Pin to the shift-dragged spot if there is one, else to the
         // configured corner once the monitor size is known.
@@ -499,6 +536,8 @@ impl eframe::App for OverlayApp {
 
         // When rainbow mode is on, pass the per-key captured hues.
         let key_hue = self.rainbow.then_some(&self.key_hue);
+        // When the heatmap is on, pass the lifetime press counts.
+        let heatmap = self.heatmap.then_some(&self.stats);
         let panel = if !keys.is_empty() && keys.len() == geometry::MOONLANDER_KEYS.len() {
             draw_board(
                 ui,
@@ -510,6 +549,7 @@ impl eframe::App for OverlayApp {
                 ball,
                 &self.ball_trail,
                 key_hue,
+                heatmap,
                 align,
             )
         } else {
@@ -526,6 +566,15 @@ impl eframe::App for OverlayApp {
         draw_close(ui.painter(), close_rect, self.close_hot);
         self.burger = Some(burger_rect.expand(5.0));
         self.close_btn = Some(close_rect.expand(5.0));
+    }
+
+    /// Flush any unsaved press counts when the app closes cleanly (tray Quit /
+    /// updater relaunch both go through a viewport Close).
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if self.stats_dirty {
+            stats::save(&self.stats);
+            self.stats_dirty = false;
+        }
     }
 }
 
@@ -617,6 +666,35 @@ fn ghost_color(key_hue: Option<&HashMap<usize, f32>>, i: usize, alpha: u8) -> Co
     }
 }
 
+/// Heatmap fill for a key: cold blue when rarely pressed, hot red for the
+/// most-pressed key, log-scaled so a handful of very high keys (space, e…)
+/// don't flatten everything else to the same color. Never-pressed keys keep
+/// the normal dim blank fill so the board still reads as a board.
+fn heat_fill(count: u64, max: u64, p: &Palette) -> Color32 {
+    if count == 0 || max == 0 {
+        return p.key_blank;
+    }
+    let t = (count as f32 + 1.0).ln() / (max as f32 + 1.0).ln();
+    let (r, g, b) = hsl_rgb(0.66 * (1.0 - t), 0.85, 0.55);
+    // More opaque the hotter the key, so frequency reads at a glance.
+    let alpha = (70.0 + 150.0 * t).round() as u8;
+    Color32::from_rgba_unmultiplied(r, g, b, alpha)
+}
+
+/// Group an integer with thousands separators ("12345" -> "12,345").
+fn group_thousands(n: u64) -> String {
+    let s = n.to_string();
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, &c) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c as char);
+    }
+    out
+}
+
 /// HSL (each 0..1, hue wraps) to sRGB bytes.
 fn hsl_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
     let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
@@ -684,9 +762,12 @@ fn draw_board(
     ball: Option<egui::Vec2>,
     trail: &[egui::Vec2],
     key_hue: Option<&HashMap<usize, f32>>,
+    heatmap: Option<&Stats>,
     align: Align2,
 ) -> Rect {
     let now = std::time::Instant::now();
+    // Hottest key, for normalizing the heatmap's color scale.
+    let heat_max = heatmap.map(Stats::max).unwrap_or(0);
     let pad = 12.0;
     let header_h = 24.0;
     let board_size = vec2(geometry::BOARD_WIDTH_U, geometry::BOARD_HEIGHT_U) * BOARD_SCALE;
@@ -704,6 +785,17 @@ fn draw_board(
         FontId::proportional(15.0),
         p.text,
     );
+    // Running press counter, shown alongside the heatmap. Right-aligned so it
+    // clears the header controls (close + hamburger) in the top-right corner.
+    if let Some(stats) = heatmap {
+        painter.text(
+            pos2(rect.max.x - 56.0, rect.min.y + pad - 1.0),
+            Align2::RIGHT_TOP,
+            format!("{} presses", group_thousands(stats.total())),
+            FontId::proportional(11.0),
+            p.text_inherited,
+        );
+    }
 
     let origin = rect.min + vec2(pad, pad + header_h);
     // Thumb keys (the rotated ones) draw slightly enlarged; scaling around the
@@ -755,7 +847,9 @@ fn draw_board(
             label = key_text(base_key);
             inherited = !label.is_empty();
         }
-        let base_fill = if label.is_empty() || inherited {
+        let base_fill = if let Some(stats) = heatmap {
+            heat_fill(stats.count(i), heat_max, &p)
+        } else if label.is_empty() || inherited {
             p.key_blank
         } else {
             p.key_fill

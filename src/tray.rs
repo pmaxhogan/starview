@@ -87,6 +87,7 @@ fn run(
         fade_menu.append(item)?;
     }
     let rainbow = CheckMenuItem::new("Rainbow key ghosts", true, initial.rainbow, None);
+    let heatmap = CheckMenuItem::new("Key heatmap", true, initial.heatmap, None);
     let update = MenuItem::new("Up to date", false, None);
     let quit = MenuItem::new("Quit starview", true, None);
 
@@ -96,6 +97,7 @@ fn run(
     menu.append(&opacity_menu)?;
     menu.append(&fade_menu)?;
     menu.append(&rainbow)?;
+    menu.append(&heatmap)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&update)?;
     menu.append(&quit)?;
@@ -138,6 +140,8 @@ fn run(
                     state.pin_base = pin.is_checked();
                 } else if *event.id() == rainbow.id() {
                     state.rainbow = rainbow.is_checked();
+                } else if *event.id() == heatmap.id() {
+                    state.heatmap = heatmap.is_checked();
                 } else if *event.id() == quit.id() {
                     on_event(TrayEvent::Quit);
                     continue;

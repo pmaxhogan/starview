@@ -42,9 +42,17 @@ leave taskbar clearance), **Opacity** (100–40%), and **Auto-hide after** (fade
 the overlay out after an idle interval — Never/5s/15s/30s/1m/2m/5m; a layer
 change or keypress brings it back), **Rainbow key ghosts** (color the
 pressed/afterglow key highlights as a rainbow that sweeps across the board),
-and **Key heatmap** (tint each key by its lifetime press count — log-scaled
+**Key heatmap** (tint each key by its lifetime press count — log-scaled
 cold-blue to hot-red — with a running press total in the header; counts persist
-to `%LOCALAPPDATA%\starview\stats.json`), plus **Quit**.
+to `%LOCALAPPDATA%\starview\stats.json`), and **Typo heatmap** (tint each key
+by how often its character was typed then immediately backspaced away — a proxy
+for your most error-prone keys — and list the worst offenders in the header),
+plus **Quit**.
+
+The typo heatmap counts a press as a typo only when it's deleted by a plain
+Backspace with no window switch in between; Ctrl/Alt+Backspace word-deletes and
+modified keystrokes (Ctrl+C, …) are excluded. In a heatmap a pressed key gets a
+bright ring so it stays visible against same-colored cells.
 
 The overlay is click-through, so its on-panel controls are gated behind the
 Shift key to keep them out of the way: hold **Shift** and drag the hamburger

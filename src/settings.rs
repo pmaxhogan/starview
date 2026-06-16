@@ -50,6 +50,9 @@ pub struct Settings {
     pub rainbow: bool,
     /// Tint each key by its lifetime press count (a usage heatmap).
     pub heatmap: bool,
+    /// Tint each key by its typo rate (presses immediately backspaced away),
+    /// and list the worst offenders in the header.
+    pub error_heatmap: bool,
 }
 
 impl Default for Settings {
@@ -62,6 +65,7 @@ impl Default for Settings {
             fade_secs: 0,
             rainbow: false,
             heatmap: false,
+            error_heatmap: false,
         }
     }
 }

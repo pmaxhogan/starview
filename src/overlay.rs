@@ -153,6 +153,13 @@ pub struct OverlayApp {
     stats: Stats,
     /// Tint each key by its press count (tray toggle).
     heatmap: bool,
+    /// Tint each key by its typo rate + list worst offenders (tray toggle).
+    error_heatmap: bool,
+    /// Recent character-producing presses (Oryx key index + foreground window
+    /// at press time), newest last. A backspace pops this to attribute the
+    /// deletion; the per-entry window guards against counting edits made after
+    /// switching apps. Bounded — typos get corrected within a few keystrokes.
+    typed: Vec<(usize, isize)>,
     /// Press counts changed since the last disk write.
     stats_dirty: bool,
     /// Last time `stats` was flushed to disk (debounces rapid typing).
@@ -201,8 +208,77 @@ impl OverlayApp {
                 .and_then(|v| v.parse().ok()),
             stats,
             heatmap: settings.heatmap,
+            error_heatmap: settings.error_heatmap,
+            typed: Vec::new(),
             stats_dirty: false,
             stats_saved: std::time::Instant::now(),
+        }
+    }
+
+    /// The effective tap keycode for a physical key index on the active layer,
+    /// following KC_TRANSPARENT fall-through to the base layer. None if there's
+    /// no layout, no such key, or the slot is a macro/empty.
+    fn effective_code(&self, i: usize) -> Option<String> {
+        let layout = self.layout.as_ref()?;
+        let on = |pos: usize| {
+            layout
+                .layers
+                .iter()
+                .find(|l| l.position == pos)
+                .and_then(|l| l.keys.get(i))
+                .and_then(|k| k.tap.as_ref())
+                .filter(|a| a.macro_.is_none())
+                .and_then(|a| a.code.clone())
+        };
+        match on(self.layer as usize).as_deref() {
+            // Transparent / unmapped falls through to the base layer in QMK.
+            None | Some("KC_TRANSPARENT" | "KC_TRNS") => on(0),
+            _ => on(self.layer as usize),
+        }
+    }
+
+    /// Feed a keypress to the typo tracker. Character keys go on a small
+    /// recent-typing buffer; a backspace pops the buffer and blames that key —
+    /// but only when the foreground window hasn't changed since it was typed,
+    /// so editing in another app doesn't masquerade as correcting a typo here.
+    /// Caret-moving keys clear the buffer; everything else leaves it intact.
+    ///
+    /// A held Ctrl/Alt/Win makes the press a shortcut, not text: Ctrl+C and
+    /// friends clear the buffer, and Ctrl+Backspace (word-delete) is dropped
+    /// rather than blamed on the single key before it.
+    fn track_typo(&mut self, i: usize) {
+        const TYPED_CAP: usize = 64;
+        let kind = self
+            .effective_code(i)
+            .as_deref()
+            .map(keycodes::classify)
+            .unwrap_or(keycodes::KeyKind::Other);
+        let shortcut = shortcut_mods_down();
+        let fg = foreground_window();
+        match kind {
+            // A modified character key (Ctrl+C, Ctrl+V, …) isn't typed text and
+            // may have changed the buffer behind our back, so reset.
+            keycodes::KeyKind::Text if shortcut => self.typed.clear(),
+            keycodes::KeyKind::Text => {
+                self.typed.push((i, fg));
+                let overflow = self.typed.len().saturating_sub(TYPED_CAP);
+                if overflow > 0 {
+                    self.typed.drain(0..overflow);
+                }
+            }
+            // Ctrl/Alt+Backspace deletes a whole word, not a single mistyped
+            // char — don't pin that on the last key; just invalidate the buffer.
+            keycodes::KeyKind::Backspace if shortcut => self.typed.clear(),
+            keycodes::KeyKind::Backspace => {
+                if let Some((prev_i, prev_fg)) = self.typed.pop()
+                    && prev_fg == fg
+                {
+                    self.stats.record_delete(prev_i);
+                    self.stats_dirty = true;
+                }
+            }
+            keycodes::KeyKind::Break => self.typed.clear(),
+            keycodes::KeyKind::Other => {}
         }
     }
 
@@ -227,7 +303,10 @@ impl eframe::App for OverlayApp {
     /// Runs even while the window is hidden (whenever a repaint is requested —
     /// the HID watcher requests one per event), so show/hide decisions live here.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        for event in self.events.try_iter() {
+        // Drain into a Vec first so the loop body can call &mut self methods
+        // (e.g. track_typo) without holding a borrow on self.events.
+        let events: Vec<AppEvent> = self.events.try_iter().collect();
+        for event in events {
             match event {
                 AppEvent::Hid(HidEvent::Layer(idx)) => {
                     // Only a genuine change is activity — the watcher re-emits
@@ -247,6 +326,7 @@ impl eframe::App for OverlayApp {
                         // Tally the lifetime press count (heatmap + counter).
                         self.stats.record(i);
                         self.stats_dirty = true;
+                        self.track_typo(i);
                         // Capture the current rainbow hue so this key (and its
                         // afterglow) keeps the color of the moment it was hit.
                         let phase =
@@ -265,6 +345,7 @@ impl eframe::App for OverlayApp {
                     self.pressed.clear();
                     self.released.clear();
                     self.key_hue.clear();
+                    self.typed.clear();
                 }
                 AppEvent::Layout(info) => self.layout = Some(info),
                 AppEvent::Settings(s) => {
@@ -274,6 +355,7 @@ impl eframe::App for OverlayApp {
                         .then(|| std::time::Duration::from_secs(s.fade_secs as u64));
                     self.rainbow = s.rainbow;
                     self.heatmap = s.heatmap;
+                    self.error_heatmap = s.error_heatmap;
                     // Re-show at full opacity and restart the timer on change.
                     self.last_activity = std::time::Instant::now();
                     let pos = s.position.map(|(x, y)| pos2(x, y));
@@ -536,7 +618,9 @@ impl eframe::App for OverlayApp {
 
         // When rainbow mode is on, pass the per-key captured hues.
         let key_hue = self.rainbow.then_some(&self.key_hue);
-        // When the heatmap is on, pass the lifetime press counts.
+        // When a stats heatmap is on, pass the counts. The typo heatmap takes
+        // precedence over the press heatmap for the board coloring + header.
+        let error = self.error_heatmap.then_some(&self.stats);
         let heatmap = self.heatmap.then_some(&self.stats);
         let panel = if !keys.is_empty() && keys.len() == geometry::MOONLANDER_KEYS.len() {
             draw_board(
@@ -550,6 +634,7 @@ impl eframe::App for OverlayApp {
                 &self.ball_trail,
                 key_hue,
                 heatmap,
+                error,
                 align,
             )
         } else {
@@ -681,6 +766,23 @@ fn heat_fill(count: u64, max: u64, p: &Palette) -> Color32 {
     Color32::from_rgba_unmultiplied(r, g, b, alpha)
 }
 
+/// Heatmap fill for a key's typo rate: hot red for the most error-prone key,
+/// scaled against the worst key so the gradient uses its full range (typo
+/// rates are all small). Keys with enough presses and no deletions show a
+/// faint green ("clean"); keys without enough data to judge stay blank.
+fn error_fill(rate: Option<f32>, max: f32, p: &Palette) -> Color32 {
+    match rate {
+        Some(r) if r > 0.0 && max > 0.0 => {
+            let t = (r / max).clamp(0.0, 1.0);
+            let (rr, gg, bb) = hsl_rgb(0.66 * (1.0 - t), 0.85, 0.55);
+            let alpha = (70.0 + 150.0 * t).round() as u8;
+            Color32::from_rgba_unmultiplied(rr, gg, bb, alpha)
+        }
+        Some(_) => Color32::from_rgba_unmultiplied(80, 200, 120, 30),
+        None => p.key_blank,
+    }
+}
+
 /// Group an integer with thousands separators ("12345" -> "12,345").
 fn group_thousands(n: u64) -> String {
     let s = n.to_string();
@@ -763,11 +865,20 @@ fn draw_board(
     trail: &[egui::Vec2],
     key_hue: Option<&HashMap<usize, f32>>,
     heatmap: Option<&Stats>,
+    error: Option<&Stats>,
     align: Align2,
 ) -> Rect {
     let now = std::time::Instant::now();
-    // Hottest key, for normalizing the heatmap's color scale.
+    // Hottest key, for normalizing the press heatmap's color scale.
     let heat_max = heatmap.map(Stats::max).unwrap_or(0);
+    // Worst typo rate, for normalizing the error heatmap's scale.
+    let error_max = error
+        .map(|s| {
+            (0..keys.len())
+                .filter_map(|i| s.error_rate(i))
+                .fold(0.0_f32, f32::max)
+        })
+        .unwrap_or(0.0);
     let pad = 12.0;
     let header_h = 24.0;
     let board_size = vec2(geometry::BOARD_WIDTH_U, geometry::BOARD_HEIGHT_U) * BOARD_SCALE;
@@ -785,11 +896,44 @@ fn draw_board(
         FontId::proportional(15.0),
         p.text,
     );
-    // Running press counter, shown alongside the heatmap. Right-aligned so it
-    // clears the header controls (close + hamburger) in the top-right corner.
-    if let Some(stats) = heatmap {
+    // Stats readout in the header, right-aligned so it clears the controls
+    // (close + hamburger) in the top-right corner. The typo heatmap shows the
+    // worst offenders; otherwise the press heatmap shows a running total.
+    let readout_at = pos2(rect.max.x - 56.0, rect.min.y + pad - 1.0);
+    if let Some(stats) = error {
+        // Resolve a key's character label, following transparency to base.
+        let label_for = |i: usize| -> String {
+            let l = keys.get(i).map(key_text).unwrap_or_default();
+            if l.is_empty() {
+                base.and_then(|b| b.get(i)).map(key_text).unwrap_or_default()
+            } else {
+                l
+            }
+        };
+        let mut top: Vec<(String, f32)> = (0..keys.len())
+            .filter_map(|i| stats.error_rate(i).map(|r| (i, r)))
+            .filter(|&(_, r)| r > 0.0)
+            // Skip blank/unlabeled keys (KC_NO etc.) — you can't mistype those.
+            .filter_map(|(i, r)| {
+                let l = label_for(i);
+                (!l.is_empty()).then_some((l, r))
+            })
+            .collect();
+        top.sort_by(|a, b| b.1.total_cmp(&a.1));
+        top.truncate(3);
+        let text = if top.is_empty() {
+            "\u{232B} no typos yet".to_owned()
+        } else {
+            let parts: Vec<String> = top
+                .iter()
+                .map(|(label, r)| format!("{label} {:.0}%", r * 100.0))
+                .collect();
+            format!("\u{232B} {}", parts.join("  "))
+        };
+        painter.text(readout_at, Align2::RIGHT_TOP, text, FontId::proportional(11.0), p.text_inherited);
+    } else if let Some(stats) = heatmap {
         painter.text(
-            pos2(rect.max.x - 56.0, rect.min.y + pad - 1.0),
+            readout_at,
             Align2::RIGHT_TOP,
             format!("{} presses", group_thousands(stats.total())),
             FontId::proportional(11.0),
@@ -847,7 +991,9 @@ fn draw_board(
             label = key_text(base_key);
             inherited = !label.is_empty();
         }
-        let base_fill = if let Some(stats) = heatmap {
+        let base_fill = if let Some(stats) = error {
+            error_fill(stats.error_rate(i), error_max, &p)
+        } else if let Some(stats) = heatmap {
             heat_fill(stats.count(i), heat_max, &p)
         } else if label.is_empty() || inherited {
             p.key_blank
@@ -866,6 +1012,14 @@ fn draw_board(
             0
         };
         let accent = (accent_alpha > 0).then(|| ghost_color(key_hue, i, accent_alpha));
+        // In a heatmap, the colored press accent can blend into a same-hue
+        // cell, hiding which key is live. Add a bright ring (brightest while
+        // held, fading with the afterglow) — it reads against any fill because
+        // its outer edge meets the dark keycap gap.
+        let press_ring = ((heatmap.is_some() || error.is_some()) && accent_alpha > 0).then(|| {
+            let a = ((accent_alpha as f32 / HELD_ALPHA as f32) * 235.0).round() as u8;
+            egui::Stroke::new(2.0, Color32::from_rgba_unmultiplied(255, 255, 255, a))
+        });
         let text_color = if inherited { p.text_inherited } else { p.text };
         // Keys with an Oryx LED color get a border in that color
         // (#000000 means the LED is off).
@@ -884,6 +1038,9 @@ fn draw_board(
             if let Some(stroke) = border {
                 painter.rect_stroke(kr, CornerRadius::same(4), stroke, egui::StrokeKind::Inside);
             }
+            if let Some(ring) = press_ring {
+                painter.rect_stroke(kr, CornerRadius::same(4), ring, egui::StrokeKind::Inside);
+            }
         } else {
             painter.add(egui::Shape::convex_polygon(
                 corners.to_vec(),
@@ -895,6 +1052,13 @@ fn draw_board(
                     corners.to_vec(),
                     accent,
                     egui::Stroke::NONE,
+                ));
+            }
+            if let Some(ring) = press_ring {
+                painter.add(egui::Shape::convex_polygon(
+                    corners.to_vec(),
+                    Color32::TRANSPARENT,
+                    ring,
                 ));
             }
         }
@@ -1047,6 +1211,28 @@ fn action_text(a: &oryx::KeyAction) -> String {
     format!("{mods}{base}")
 }
 
+/// Opaque id of the window currently receiving keystrokes, for the typo
+/// tracker's "did the user switch apps?" guard. 0 on non-Windows.
+#[cfg(windows)]
+fn foreground_window() -> isize {
+    win32::foreground_window()
+}
+#[cfg(not(windows))]
+fn foreground_window() -> isize {
+    0
+}
+
+/// True when a Ctrl/Alt/Win modifier is held (so the keypress is a shortcut,
+/// not text). Always false on non-Windows.
+#[cfg(windows)]
+fn shortcut_mods_down() -> bool {
+    win32::ctrl_alt_gui_down()
+}
+#[cfg(not(windows))]
+fn shortcut_mods_down() -> bool {
+    false
+}
+
 #[cfg(windows)]
 mod win32 {
     use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
@@ -1054,11 +1240,13 @@ mod win32 {
     use windows::Win32::Graphics::Gdi::{
         GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
     };
-    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_SHIFT};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_CONTROL, VK_LBUTTON, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GWL_EXSTYLE, GetCursorPos, GetWindowLongPtrW, LWA_ALPHA, SetLayeredWindowAttributes,
-        SetWindowLongPtrW, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-        WS_EX_TRANSPARENT,
+        GWL_EXSTYLE, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, LWA_ALPHA,
+        SetLayeredWindowAttributes, SetWindowLongPtrW, WS_EX_APPWINDOW, WS_EX_LAYERED,
+        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
     };
 
     fn hwnd(frame: &eframe::Frame) -> Option<HWND> {
@@ -1072,8 +1260,29 @@ mod win32 {
         unsafe { (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0 }
     }
 
+    /// Handle of the foreground window as a plain integer, for equality checks.
+    /// The overlay itself is WS_EX_NOACTIVATE, so this is the app the user is
+    /// actually typing into, never us.
+    pub fn foreground_window() -> isize {
+        unsafe { GetForegroundWindow().0 as isize }
+    }
+
     pub fn lbutton_down() -> bool {
         unsafe { (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0 }
+    }
+
+    /// True when any of Ctrl/Alt/Win is held — i.e. the keypress is a shortcut
+    /// (Ctrl+C, Ctrl+Backspace word-delete, …), not typed text. Shift is
+    /// excluded: Shift+letter is still text. Reads OS-level modifier state, so
+    /// it's correct regardless of which physical key produced the modifier.
+    pub fn ctrl_alt_gui_down() -> bool {
+        unsafe {
+            let down = |vk: i32| (GetAsyncKeyState(vk) as u16 & 0x8000) != 0;
+            down(VK_CONTROL.0 as i32)
+                || down(VK_MENU.0 as i32)
+                || down(VK_LWIN.0 as i32)
+                || down(VK_RWIN.0 as i32)
+        }
     }
 
     /// Cursor position in physical (per-pixel) desktop coordinates.

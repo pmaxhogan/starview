@@ -17,6 +17,95 @@
 //! action's `color` field; the renderer may show a color swatch next to the
 //! "RGB" label.
 
+/// What the typo tracker makes of a keycode (see `classify`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyKind {
+    /// Produces a character into the text being typed (letters, digits,
+    /// punctuation, space) — pushed onto the recent-typing buffer.
+    Text,
+    /// Deletes the previous character — pops the buffer and blames that key.
+    Backspace,
+    /// Moves the caret or otherwise makes the recent-typing buffer no longer
+    /// reflect what a backspace would delete (arrows, Home/End/PgUp/Dn, Enter,
+    /// Tab, Esc, forward Delete) — clears the buffer.
+    Break,
+    /// Modifiers, layer switches, media/fn keys, etc.: ignored, buffer intact.
+    Other,
+}
+
+/// Is this resolved keycode the Backspace key?
+pub fn is_backspace(code: &str) -> bool {
+    matches!(code, "KC_BACKSPACE" | "KC_BSPACE" | "KC_BSPC")
+}
+
+/// Bucket a resolved (transparency-followed) keycode for the typo tracker.
+pub fn classify(code: &str) -> KeyKind {
+    if is_backspace(code) {
+        return KeyKind::Backspace;
+    }
+    let text = matches!(
+        code,
+        "KC_A" | "KC_B" | "KC_C" | "KC_D" | "KC_E" | "KC_F" | "KC_G" | "KC_H" | "KC_I" | "KC_J"
+            | "KC_K" | "KC_L" | "KC_M" | "KC_N" | "KC_O" | "KC_P" | "KC_Q" | "KC_R" | "KC_S"
+            | "KC_T" | "KC_U" | "KC_V" | "KC_W" | "KC_X" | "KC_Y" | "KC_Z"
+            | "KC_0" | "KC_1" | "KC_2" | "KC_3" | "KC_4" | "KC_5" | "KC_6" | "KC_7" | "KC_8"
+            | "KC_9"
+            | "KC_SPACE" | "KC_SPC"
+            // punctuation
+            | "KC_MINUS" | "KC_MINS" | "KC_EQUAL" | "KC_EQL"
+            | "KC_LEFT_BRACKET" | "KC_LBRACKET" | "KC_LBRC"
+            | "KC_RIGHT_BRACKET" | "KC_RBRACKET" | "KC_RBRC"
+            | "KC_BACKSLASH" | "KC_BSLASH" | "KC_BSLS"
+            | "KC_SEMICOLON" | "KC_SCOLON" | "KC_SCLN"
+            | "KC_QUOTE" | "KC_QUOT" | "KC_GRAVE" | "KC_GRV"
+            | "KC_COMMA" | "KC_COMM" | "KC_DOT" | "KC_SLASH" | "KC_SLSH"
+            | "KC_NONUS_HASH" | "KC_NUHS" | "KC_NONUS_BACKSLASH" | "KC_NONUS_BSLASH" | "KC_NUBS"
+            // shifted symbols (still single characters)
+            | "KC_EXCLAIM" | "KC_EXLM" | "KC_AT" | "KC_HASH" | "KC_DOLLAR" | "KC_DLR"
+            | "KC_PERCENT" | "KC_PERC" | "KC_CIRCUMFLEX" | "KC_CIRC" | "KC_AMPERSAND" | "KC_AMPR"
+            | "KC_ASTERISK" | "KC_ASTR" | "KC_LEFT_PAREN" | "KC_LPRN" | "KC_RIGHT_PAREN"
+            | "KC_RPRN" | "KC_UNDERSCORE" | "KC_UNDS" | "KC_PLUS" | "KC_LEFT_CURLY_BRACE"
+            | "KC_LCBR" | "KC_RIGHT_CURLY_BRACE" | "KC_RCBR" | "KC_PIPE" | "KC_COLON" | "KC_COLN"
+            | "KC_DOUBLE_QUOTE" | "KC_DQUO" | "KC_DQT" | "KC_LEFT_ANGLE_BRACKET" | "KC_LABK"
+            | "KC_LT" | "KC_RIGHT_ANGLE_BRACKET" | "KC_RABK" | "KC_GT" | "KC_QUESTION"
+            | "KC_QUES" | "KC_TILDE" | "KC_TILD"
+    );
+    if text {
+        return KeyKind::Text;
+    }
+    let brk = matches!(
+        code,
+        "KC_ENTER" | "KC_ENT" | "KC_KP_ENTER" | "KC_PENT"
+            | "KC_TAB" | "KC_ESCAPE" | "KC_ESC" | "KC_DELETE" | "KC_DEL"
+            | "KC_LEFT" | "KC_RIGHT" | "KC_UP" | "KC_DOWN"
+            | "KC_HOME" | "KC_END"
+            | "KC_PAGE_UP" | "KC_PGUP" | "KC_PAGE_DOWN" | "KC_PGDOWN" | "KC_PGDN"
+            | "KC_MS_BTN1" | "KC_BTN1" | "KC_MS_BTN2" | "KC_BTN2" | "KC_MS_BTN3" | "KC_BTN3"
+    );
+    if brk { KeyKind::Break } else { KeyKind::Other }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_buckets() {
+        assert_eq!(classify("KC_A"), KeyKind::Text);
+        assert_eq!(classify("KC_5"), KeyKind::Text);
+        assert_eq!(classify("KC_SPACE"), KeyKind::Text);
+        assert_eq!(classify("KC_COMMA"), KeyKind::Text);
+        assert_eq!(classify("KC_BSPC"), KeyKind::Backspace);
+        assert_eq!(classify("KC_BACKSPACE"), KeyKind::Backspace);
+        assert_eq!(classify("KC_ENTER"), KeyKind::Break);
+        assert_eq!(classify("KC_LEFT"), KeyKind::Break);
+        assert_eq!(classify("KC_DELETE"), KeyKind::Break);
+        assert_eq!(classify("KC_LSFT"), KeyKind::Other);
+        assert_eq!(classify("MO"), KeyKind::Other);
+        assert_eq!(classify("KC_VOLU"), KeyKind::Other);
+    }
+}
+
 /// Returns a short label for a QMK keycode string, or None if unknown.
 /// KC_TRANSPARENT and KC_NO return Some("") (render as blank).
 pub fn key_label(code: &str) -> Option<&'static str> {

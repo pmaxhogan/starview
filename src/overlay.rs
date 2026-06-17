@@ -196,6 +196,8 @@ pub struct OverlayApp {
     error_heatmap: bool,
     /// Show a live WPM readout (tray toggle).
     show_wpm: bool,
+    /// Show the per-finger load chart (tray toggle).
+    show_fingers: bool,
     /// Timestamps of recent character keypresses, for the rolling WPM window.
     wpm_times: Vec<std::time::Instant>,
     /// Overlay size percent (UI zoom factor); 100 = default.
@@ -265,6 +267,7 @@ impl OverlayApp {
             heatmap: settings.heatmap,
             error_heatmap: settings.error_heatmap,
             show_wpm: settings.show_wpm,
+            show_fingers: settings.show_fingers,
             wpm_times: Vec::new(),
             scale: settings.scale,
             applied_scale: None,
@@ -491,6 +494,7 @@ impl eframe::App for OverlayApp {
                     self.error_heatmap = s.error_heatmap;
                     self.scale = s.scale;
                     self.show_wpm = s.show_wpm;
+                    self.show_fingers = s.show_fingers;
                     set_theme(s.theme);
                     // Re-show at full opacity and restart the timer on change.
                     self.last_activity = std::time::Instant::now();
@@ -838,6 +842,7 @@ impl eframe::App for OverlayApp {
         let error = self.error_heatmap.then_some(&self.stats);
         let heatmap = self.heatmap.then_some(&self.stats);
         let wpm = self.show_wpm.then(|| self.current_wpm());
+        let finger_load = self.show_fingers.then_some(&self.stats);
         let panel = if !keys.is_empty() && keys.len() == geometry::MOONLANDER_KEYS.len() {
             draw_board(
                 ui,
@@ -852,6 +857,7 @@ impl eframe::App for OverlayApp {
                 heatmap,
                 error,
                 wpm,
+                finger_load,
                 align,
             )
         } else {
@@ -1103,6 +1109,7 @@ fn draw_board(
     heatmap: Option<&Stats>,
     error: Option<&Stats>,
     wpm: Option<u32>,
+    finger_load: Option<&Stats>,
     align: Align2,
 ) -> Rect {
     let now = std::time::Instant::now();
@@ -1344,6 +1351,48 @@ fn draw_board(
             let anchor = to_screen(kx + kw / 2.0, ky + kh - 2.0 * gap);
             let pos = anchor - rotate(vec2(galley.size().x / 2.0, galley.size().y));
             key_painter.add(TextShape::new(pos, galley, Color32::WHITE).with_angle(angle));
+        }
+    }
+
+    // Per-finger load chart in the upper center gap between the hands: ten
+    // bars (left pinky→thumb, gap, right thumb→pinky) sized by lifetime presses
+    // on each finger, normalized to the busiest finger.
+    if let Some(stats) = finger_load {
+        let mut loads = [0u64; 10];
+        for i in 0..geometry::MOONLANDER_KEYS.len() {
+            loads[geometry::finger_slot(i)] += stats.count(i);
+        }
+        let max = loads.iter().copied().max().unwrap_or(0).max(1) as f32;
+        let cx = origin.x + 8.5 * BOARD_SCALE;
+        let top = origin.y + 0.7 * BOARD_SCALE;
+        let area_w = 2.7 * BOARD_SCALE;
+        let area_h = 2.6 * BOARD_SCALE;
+        let base_y = top + area_h;
+        let mid_gap = area_w * 0.06;
+        let slot_w = (area_w - mid_gap) / 10.0;
+        let bar_w = slot_w * 0.66;
+        let start_x = cx - area_w / 2.0;
+        painter.line_segment(
+            [pos2(start_x, base_y), pos2(start_x + area_w, base_y)],
+            egui::Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 45)),
+        );
+        for s in 0..10 {
+            let x = start_x + s as f32 * slot_w + if s >= 5 { mid_gap } else { 0.0 };
+            let h = (loads[s] as f32 / max) * area_h;
+            // Left hand in the accent color, right hand in light grey.
+            let col = if s < 5 { p.accent } else { Color32::from_rgb(210, 214, 228) };
+            painter.rect_filled(
+                Rect::from_min_max(pos2(x, base_y - h), pos2(x + bar_w, base_y)),
+                CornerRadius::same(2),
+                col,
+            );
+            painter.text(
+                pos2(x + bar_w / 2.0, base_y + 2.0),
+                Align2::CENTER_TOP,
+                geometry::FINGER_LABELS[s],
+                FontId::proportional(7.5),
+                p.text_inherited,
+            );
         }
     }
 

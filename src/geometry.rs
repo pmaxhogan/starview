@@ -225,6 +225,31 @@ pub fn key_index_for_matrix(row: u8, col: u8) -> Option<usize> {
     MOONLANDER_MATRIX.iter().position(|&(r, c)| r == row && c == col)
 }
 
+/// One-letter labels for the 10 finger slots, in slot order (left pinky-to-thumb
+/// then right thumb-to-pinky), matching the finger-load chart's layout.
+pub const FINGER_LABELS: [&str; 10] = ["P", "R", "M", "I", "T", "T", "I", "M", "R", "P"];
+
+/// Which of the 10 finger "slots" a key belongs to, for the per-finger load
+/// chart. Slots 0-4 are the left hand (pinky→thumb), 5-9 the right hand
+/// (thumb→pinky), so the chart mirrors the physical board. Finger within a hand
+/// is inferred from the key's column; thumb-cluster keys (rotated) are thumbs.
+pub fn finger_slot(i: usize) -> usize {
+    let g = &MOONLANDER_KEYS[i];
+    let left = i < 36;
+    let rank = if g.rot_deg != 0.0 {
+        4 // thumb cluster
+    } else {
+        let col = if left { g.x as i32 } else { 16 - g.x as i32 };
+        match col {
+            0 | 1 => 0, // pinky (outer two columns)
+            2 => 1,     // ring
+            3 => 2,     // middle
+            _ => 3,     // index (inner columns 4-6)
+        }
+    };
+    if left { rank } else { 9 - rank }
+}
+
 /// Bounding box of the whole board in key units (including rotated keys).
 ///
 /// Width is set by the main grid: right half outer column at x = 16, 1u wide.
@@ -265,6 +290,21 @@ mod tests {
                 assert!(ry >= -1e-4 && ry <= BOARD_HEIGHT_U + 1e-4, "y out of box: {ry}");
             }
         }
+    }
+
+    #[test]
+    fn finger_slots_cover_both_hands() {
+        let mut seen = [false; 10];
+        for i in 0..MOONLANDER_KEYS.len() {
+            let s = finger_slot(i);
+            assert!(s < 10, "slot {s} out of range for key {i}");
+            seen[s] = true;
+        }
+        // Every finger slot should be assigned at least one key.
+        assert!(seen.iter().all(|&b| b), "some finger slot has no keys: {seen:?}");
+        // Left thumb (slot 4) and right thumb (slot 5) come from the clusters.
+        assert_eq!(finger_slot(32), 4, "left big thumb key");
+        assert_eq!(finger_slot(68), 5, "right big thumb key");
     }
 
     #[test]

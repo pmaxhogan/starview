@@ -34,8 +34,9 @@ Order is easy/low-risk first, then the data-model and harder ones.
 
 - [x] **Live WPM readout** (v0.10.0) — rolling words-per-minute (chars/5 over a
   5s window, decays when idle), shown after the title; tray toggle.
-- [ ] **Per-hand / per-finger load** — finger assignment per key (geometry-based
-  table); show hand/finger balance.
+- [x] **Per-hand / per-finger load** (v0.11.0) — geometry-based finger slots; a
+  10-bar load chart (left accent / right grey, P R M I T labels) in the center
+  gap; tray toggle.
 - [ ] **Bigram frequency** — count consecutive key pairs; expose top digraphs.
 - [ ] **Daily counts & streaks** — per-day press totals + streak, keyed by local
   date (Win32 local time); persisted in stats.

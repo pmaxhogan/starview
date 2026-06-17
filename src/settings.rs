@@ -108,6 +108,8 @@ pub struct Settings {
     pub monitor: usize,
     /// Show a live words-per-minute readout in the header.
     pub show_wpm: bool,
+    /// Show the per-finger load chart in the center gap.
+    pub show_fingers: bool,
 }
 
 impl Default for Settings {
@@ -125,6 +127,7 @@ impl Default for Settings {
             theme: Theme::Blue,
             monitor: 0,
             show_wpm: false,
+            show_fingers: false,
         }
     }
 }

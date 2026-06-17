@@ -22,8 +22,8 @@ Order is easy/low-risk first, then the data-model and harder ones.
 - [x] **Color theme options** (v0.6.0) — "Accent color" tray submenu
   (Blue/Green/Purple/Amber/Pink); accent drives key ghosts, trackball, and UI
   highlights; persisted.
-- [ ] **Recent-layer breadcrumb** — momentary toast / small trail of the last
-  few layers on switch, fading out.
+- [x] **Recent-layer breadcrumb** (v0.7.0) — fading "2 › 5 › 1" trail of the
+  last few layers, centered at the panel top for ~2s after a switch.
 - [ ] **Global hotkey toggle** — `RegisterHotKey` to show/hide (pin) the overlay
   on a configurable shortcut.
 - [ ] **Multi-monitor placement** — choose which monitor the overlay docks to;

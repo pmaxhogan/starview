@@ -49,6 +49,8 @@ const HELD_ALPHA: u8 = 150;
 const RELEASED_ALPHA: u8 = 95;
 /// How long a released key keeps glowing before it's fully faded out.
 const AFTERGLOW_SECS: f32 = 3.0;
+/// How long the recent-layer breadcrumb stays up after a switch before fading.
+const BREADCRUMB_SECS: f32 = 2.0;
 /// Hue cycles per second for rainbow mode (full spectrum every ~8s), so a
 /// press a second later lands on a clearly different color.
 const RAINBOW_SPEED: f32 = 0.12;
@@ -124,6 +126,9 @@ pub struct OverlayApp {
     events: Receiver<AppEvent>,
     layout: Option<LayoutInfo>,
     layer: u8,
+    /// Recently-entered layers (layer, entered_at) for the fading breadcrumb
+    /// shown briefly after a switch. Newest last; cleared once faded.
+    layer_trail: Vec<(u8, std::time::Instant)>,
     /// Oryx key indices currently held down on the physical board.
     pressed: HashSet<usize>,
     /// Recently released keys -> release time; they afterglow and fade out.
@@ -212,6 +217,7 @@ impl OverlayApp {
             events,
             layout,
             layer: 0,
+            layer_trail: Vec::new(),
             pressed: HashSet::new(),
             released: HashMap::new(),
             ball: egui::Vec2::ZERO,
@@ -341,6 +347,43 @@ impl OverlayApp {
             None => format!("Layer {}", self.layer),
         }
     }
+
+    /// A small fading "2 › 5 › 1" trail of recently-visited layers, centered at
+    /// the top of the panel for a couple seconds after a switch.
+    fn draw_breadcrumb(&self, ui: &egui::Ui, panel: Rect) {
+        let Some(&(_, last)) = self.layer_trail.last() else { return };
+        let age = last.elapsed().as_secs_f32();
+        if self.layer_trail.len() < 2 || age >= BREADCRUMB_SECS {
+            return;
+        }
+        let fade = (1.0 - age / BREADCRUMB_SECS).clamp(0.0, 1.0);
+        let text = self
+            .layer_trail
+            .iter()
+            .map(|(l, _)| l.to_string())
+            .collect::<Vec<_>>()
+            .join("  \u{203A}  ");
+        let p = palette();
+        let painter = ui.painter();
+        let tcol = Color32::from_rgba_unmultiplied(
+            p.text.r(),
+            p.text.g(),
+            p.text.b(),
+            (fade * 255.0) as u8,
+        );
+        let galley = painter.layout_no_wrap(text, FontId::proportional(12.0), tcol);
+        let pad = vec2(8.0, 3.0);
+        let rect = Rect::from_center_size(
+            pos2(panel.center().x, panel.min.y + 13.0),
+            galley.size() + pad * 2.0,
+        );
+        painter.rect_filled(
+            rect,
+            CornerRadius::same(7),
+            Color32::from_rgba_unmultiplied(40, 44, 60, (fade * 170.0) as u8),
+        );
+        painter.galley(rect.min + pad, galley, tcol);
+    }
 }
 
 impl eframe::App for OverlayApp {
@@ -361,7 +404,19 @@ impl eframe::App for OverlayApp {
                     // the current layer on each idle re-pair, which must not
                     // keep resetting the auto-fade timer.
                     if idx != self.layer {
-                        self.last_activity = std::time::Instant::now();
+                        let t = std::time::Instant::now();
+                        self.last_activity = t;
+                        // Seed the trail with where we came from on the first
+                        // hop, so the breadcrumb always shows at least a pair.
+                        if self.layer_trail.is_empty() {
+                            self.layer_trail.push((self.layer, t));
+                        }
+                        self.layer_trail.push((idx, t));
+                        const TRAIL_MAX: usize = 5;
+                        let overflow = self.layer_trail.len().saturating_sub(TRAIL_MAX);
+                        if overflow > 0 {
+                            self.layer_trail.drain(0..overflow);
+                        }
                     }
                     self.layer = idx;
                     self.connected = true;
@@ -479,6 +534,15 @@ impl eframe::App for OverlayApp {
         // Drop captured hues for keys that are no longer lit.
         self.key_hue
             .retain(|i, _| self.pressed.contains(i) || self.released.contains_key(i));
+
+        // Layer breadcrumb: animate the fade, then clear once fully faded.
+        if let Some(&(_, last)) = self.layer_trail.last() {
+            if last.elapsed().as_secs_f32() >= BREADCRUMB_SECS {
+                self.layer_trail.clear();
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(30));
+            }
+        }
 
         // Flush press counts to disk, debounced so a burst of typing writes
         // once rather than per keystroke. on_exit catches anything still dirty.
@@ -732,6 +796,8 @@ impl eframe::App for OverlayApp {
         draw_close(ui.painter(), close_rect, self.close_hot);
         self.burger = Some(burger_rect.expand(5.0));
         self.close_btn = Some(close_rect.expand(5.0));
+
+        self.draw_breadcrumb(ui, panel);
     }
 
     /// Flush any unsaved press counts when the app closes cleanly (tray Quit /

@@ -156,6 +156,7 @@ fn run(
     coloring_menu.append(&rainbow)?;
     coloring_menu.append(&heatmap)?;
     coloring_menu.append(&error_heatmap)?;
+    let wpm = CheckMenuItem::new("Show typing speed", true, initial.show_wpm, None);
     let reset_stats = MenuItem::new("Reset key stats", true, None);
     // Disabled label showing the running version. Enabled "Up to date" item
     // below doubles as a manual "check for updates" button.
@@ -174,6 +175,7 @@ fn run(
     menu.append(&fade_menu)?;
     menu.append(&theme_menu)?;
     menu.append(&coloring_menu)?;
+    menu.append(&wpm)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&reset_stats)?;
     menu.append(&PredefinedMenuItem::separator())?;
@@ -258,6 +260,8 @@ fn run(
                     rainbow.set_checked(state.rainbow);
                     heatmap.set_checked(state.heatmap);
                     error_heatmap.set_checked(state.error_heatmap);
+                } else if *event.id() == wpm.id() {
+                    state.show_wpm = wpm.is_checked();
                 } else if *event.id() == reset_stats.id() {
                     on_event(TrayEvent::ResetStats);
                     continue;

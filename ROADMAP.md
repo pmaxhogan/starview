@@ -32,8 +32,8 @@ Order is easy/low-risk first, then the data-model and harder ones.
 
 ## Typing analytics (keypress-driven; pure logic unit-tested)
 
-- [ ] **Live WPM readout** — rolling words-per-minute from the keypress stream
-  (chars/5 over a sliding window), shown in the header.
+- [x] **Live WPM readout** (v0.10.0) — rolling words-per-minute (chars/5 over a
+  5s window, decays when idle), shown after the title; tray toggle.
 - [ ] **Per-hand / per-finger load** — finger assignment per key (geometry-based
   table); show hand/finger balance.
 - [ ] **Bigram frequency** — count consecutive key pairs; expose top digraphs.

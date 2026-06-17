@@ -106,6 +106,8 @@ pub struct Settings {
     pub theme: Theme,
     /// Which monitor to dock to (index into the primary-first monitor list).
     pub monitor: usize,
+    /// Show a live words-per-minute readout in the header.
+    pub show_wpm: bool,
 }
 
 impl Default for Settings {
@@ -122,6 +124,7 @@ impl Default for Settings {
             scale: 100,
             theme: Theme::Blue,
             monitor: 0,
+            show_wpm: false,
         }
     }
 }

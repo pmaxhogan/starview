@@ -53,6 +53,8 @@ const RELEASED_ALPHA: u8 = 95;
 const AFTERGLOW_SECS: f32 = 3.0;
 /// How long the recent-layer breadcrumb stays up after a switch before fading.
 const BREADCRUMB_SECS: f32 = 2.0;
+/// Rolling window (seconds) over which live WPM is averaged.
+const WPM_WINDOW: f32 = 5.0;
 /// Hue cycles per second for rainbow mode (full spectrum every ~8s), so a
 /// press a second later lands on a clearly different color.
 const RAINBOW_SPEED: f32 = 0.12;
@@ -192,6 +194,10 @@ pub struct OverlayApp {
     heatmap: bool,
     /// Tint each key by its typo rate + list worst offenders (tray toggle).
     error_heatmap: bool,
+    /// Show a live WPM readout (tray toggle).
+    show_wpm: bool,
+    /// Timestamps of recent character keypresses, for the rolling WPM window.
+    wpm_times: Vec<std::time::Instant>,
     /// Overlay size percent (UI zoom factor); 100 = default.
     scale: u8,
     /// Last scale pushed to the viewport, so a change re-zooms + resizes once.
@@ -258,6 +264,8 @@ impl OverlayApp {
             stats,
             heatmap: settings.heatmap,
             error_heatmap: settings.error_heatmap,
+            show_wpm: settings.show_wpm,
+            wpm_times: Vec::new(),
             scale: settings.scale,
             applied_scale: None,
             typed: Vec::new(),
@@ -327,6 +335,8 @@ impl OverlayApp {
                 if overflow > 0 {
                     self.typed.drain(0..overflow);
                 }
+                // A character was typed — feed the rolling WPM window.
+                self.wpm_times.push(std::time::Instant::now());
             }
             // Ctrl/Alt+Backspace deletes a whole word, not a single mistyped
             // char — don't pin that on the last key; just invalidate the buffer.
@@ -354,6 +364,18 @@ impl OverlayApp {
             Some(name) => format!("{}: {}", self.layer, name),
             None => format!("Layer {}", self.layer),
         }
+    }
+
+    /// Live words-per-minute over the rolling window: characters/5 per minute,
+    /// using the standard 5-chars-per-word convention. Decays to 0 when idle.
+    fn current_wpm(&self) -> u32 {
+        let now = std::time::Instant::now();
+        let n = self
+            .wpm_times
+            .iter()
+            .filter(|t| now.duration_since(**t).as_secs_f32() <= WPM_WINDOW)
+            .count();
+        (n as f32 * 12.0 / WPM_WINDOW).round() as u32
     }
 
     /// A small fading "2 › 5 › 1" trail of recently-visited layers, centered at
@@ -468,6 +490,7 @@ impl eframe::App for OverlayApp {
                     self.heatmap = s.heatmap;
                     self.error_heatmap = s.error_heatmap;
                     self.scale = s.scale;
+                    self.show_wpm = s.show_wpm;
                     set_theme(s.theme);
                     // Re-show at full opacity and restart the timer on change.
                     self.last_activity = std::time::Instant::now();
@@ -545,6 +568,14 @@ impl eframe::App for OverlayApp {
         // Drop captured hues for keys that are no longer lit.
         self.key_hue
             .retain(|i, _| self.pressed.contains(i) || self.released.contains_key(i));
+
+        // Age out old WPM samples; keep repainting while any remain so the
+        // readout decays toward zero when typing stops.
+        self.wpm_times
+            .retain(|t| now.duration_since(*t).as_secs_f32() <= WPM_WINDOW);
+        if self.show_wpm && !self.wpm_times.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
 
         // Layer breadcrumb: animate the fade, then clear once fully faded.
         if let Some(&(_, last)) = self.layer_trail.last() {
@@ -806,6 +837,7 @@ impl eframe::App for OverlayApp {
         // precedence over the press heatmap for the board coloring + header.
         let error = self.error_heatmap.then_some(&self.stats);
         let heatmap = self.heatmap.then_some(&self.stats);
+        let wpm = self.show_wpm.then(|| self.current_wpm());
         let panel = if !keys.is_empty() && keys.len() == geometry::MOONLANDER_KEYS.len() {
             draw_board(
                 ui,
@@ -819,6 +851,7 @@ impl eframe::App for OverlayApp {
                 key_hue,
                 heatmap,
                 error,
+                wpm,
                 align,
             )
         } else {
@@ -1069,6 +1102,7 @@ fn draw_board(
     key_hue: Option<&HashMap<usize, f32>>,
     heatmap: Option<&Stats>,
     error: Option<&Stats>,
+    wpm: Option<u32>,
     align: Align2,
 ) -> Rect {
     let now = std::time::Instant::now();
@@ -1092,13 +1126,23 @@ fn draw_board(
     let p = palette();
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same(13), p.panel_bg);
-    painter.text(
+    let title_rect = painter.text(
         rect.min + vec2(pad + 2.0, pad - 2.0),
         Align2::LEFT_TOP,
         title,
         FontId::proportional(15.0),
         p.text,
     );
+    // Live WPM, just right of the title so it clears the right-side readouts.
+    if let Some(w) = wpm {
+        painter.text(
+            pos2(title_rect.max.x + 10.0, rect.min.y + pad - 1.0),
+            Align2::LEFT_TOP,
+            format!("{w} wpm"),
+            FontId::proportional(11.0),
+            p.text_inherited,
+        );
+    }
     // Stats readout in the header, right-aligned so it clears the controls
     // (close + hamburger) in the top-right corner. The typo heatmap shows the
     // worst offenders; otherwise the press heatmap shows a running total.

@@ -49,6 +49,12 @@ const AFTERGLOW_SECS: f32 = 3.0;
 /// Hue cycles per second for rainbow mode (full spectrum every ~8s), so a
 /// press a second later lands on a clearly different color.
 const RAINBOW_SPEED: f32 = 0.12;
+/// Fraction of the transparency gap (toward fully opaque) to close when the
+/// display is in HDR. SDR content is pinned to reference white while HDR
+/// content behind it can be many times brighter, so the same window alpha
+/// lets far more light show through and the dark panel washes out; raising
+/// the effective opacity counters that. 0.0 = no change, 1.0 = force opaque.
+const HDR_OPACITY_COMPENSATION: f32 = 0.55;
 
 // rgba(16,18,28), fully opaque: the tray "Opacity" control (window-level
 // alpha) fades the whole overlay down from here, so the panel must start
@@ -575,7 +581,16 @@ impl eframe::App for OverlayApp {
                 }
                 _ => 1.0,
             };
-            let alpha = (self.opacity as f32 / 100.0 * 255.0 * fade).round() as u8;
+            // Under HDR, raise the effective opacity to offset the washout
+            // (see HDR_OPACITY_COMPENSATION) so a given setting reads the same
+            // as on an SDR display.
+            let opacity = if crate::hdr::active() {
+                let gap = 100.0 - self.opacity as f32;
+                self.opacity as f32 + gap * HDR_OPACITY_COMPENSATION
+            } else {
+                self.opacity as f32
+            };
+            let alpha = (opacity / 100.0 * 255.0 * fade).round() as u8;
             win32::assert_overlay_styles(
                 frame,
                 !interactive,

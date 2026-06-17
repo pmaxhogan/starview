@@ -24,12 +24,30 @@ pub enum TrayEvent {
 }
 
 static TRAY_THREAD: AtomicU32 = AtomicU32::new(0);
-static PENDING_UPDATE: Mutex<Option<String>> = Mutex::new(None);
+static PENDING_UPDATE: Mutex<Option<UpdateState>> = Mutex::new(None);
+
+/// Result of an update check, handed from a checker thread to the tray's
+/// message pump (which owns the menu items).
+enum UpdateState {
+    /// A newer version was downloaded and is ready to install.
+    Ready(String),
+    /// The check finished and we're already on the latest version.
+    UpToDate,
+}
 
 /// Tells the tray (from any thread) that an update is downloaded and ready;
 /// the menu's update item lights up.
 pub fn notify_update(version: &str) {
-    *PENDING_UPDATE.lock().unwrap() = Some(version.to_owned());
+    set_update_state(UpdateState::Ready(version.to_owned()));
+}
+
+/// Tells the tray a manual check came back clean (no newer version).
+fn notify_uptodate() {
+    set_update_state(UpdateState::UpToDate);
+}
+
+fn set_update_state(state: UpdateState) {
+    *PENDING_UPDATE.lock().unwrap() = Some(state);
     let tid = TRAY_THREAD.load(Ordering::Relaxed);
     if tid != 0 {
         // Wake the message pump so it notices.
@@ -89,7 +107,10 @@ fn run(
     let rainbow = CheckMenuItem::new("Rainbow key ghosts", true, initial.rainbow, None);
     let heatmap = CheckMenuItem::new("Key heatmap", true, initial.heatmap, None);
     let error_heatmap = CheckMenuItem::new("Typo heatmap", true, initial.error_heatmap, None);
-    let update = MenuItem::new("Up to date", false, None);
+    // Disabled label showing the running version. Enabled "Up to date" item
+    // below doubles as a manual "check for updates" button.
+    let version = MenuItem::new(format!("starview v{}", updater::current_version()), false, None);
+    let update = MenuItem::new("Up to date", true, None);
     let quit = MenuItem::new("Quit starview", true, None);
 
     let menu = Menu::new();
@@ -101,6 +122,7 @@ fn run(
     menu.append(&heatmap)?;
     menu.append(&error_heatmap)?;
     menu.append(&PredefinedMenuItem::separator())?;
+    menu.append(&version)?;
     menu.append(&update)?;
     menu.append(&quit)?;
     // Generous bottom padding: auto-hiding taskbars pop up OVER the bottom of
@@ -124,11 +146,15 @@ fn run(
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
-            // The update checker wakes us with WM_APP once a new version is
-            // downloaded; light up the install item (we're on the tray thread
-            // here, so touching the menu items is fine).
-            if let Some(version) = PENDING_UPDATE.lock().unwrap().take() {
-                update.set_text(format!("Install update v{version}"));
+            // A checker thread wakes us with WM_APP when it has news (we're on
+            // the tray thread here, so touching the menu items is fine).
+            if let Some(state) = PENDING_UPDATE.lock().unwrap().take() {
+                match state {
+                    UpdateState::Ready(version) => {
+                        update.set_text(format!("Install update v{version}"));
+                    }
+                    UpdateState::UpToDate => update.set_text("Up to date"),
+                }
                 update.set_enabled(true);
             }
             // Menu clicks were queued by the dispatch above.
@@ -153,6 +179,16 @@ fn run(
                     if updater::install_ready_update() {
                         // The installer stops us, swaps the exe, relaunches.
                         on_event(TrayEvent::Quit);
+                    } else {
+                        // Nothing downloaded yet: run a manual check. The
+                        // network call blocks, so it runs off-thread and reports
+                        // back via notify_update / notify_uptodate.
+                        update.set_text("Checking for updates\u{2026}");
+                        update.set_enabled(false);
+                        updater::check_now(|found| match found {
+                            Some(version) => notify_update(&version),
+                            None => notify_uptodate(),
+                        });
                     }
                     continue;
                 } else if let Some((corner, _)) =

@@ -22,7 +22,9 @@ Grab `starview-setup.exe` from the
 run it — per-user install (no admin), with an optional start-with-Windows
 task. The app then checks for new releases daily and offers updates via the
 tray menu ("Install update vX.Y.Z"), installing silently and relaunching
-itself. Or build from source: `cargo build --release`.
+itself. The tray menu also shows the running version, and its "Up to date"
+item can be clicked to check for updates on demand. Or build from source:
+`cargo build --release`.
 
 Releases are built by the `release` GitHub Actions workflow on `v*` tags
 (tag must match `Cargo.toml`'s version); each release carries the installer,

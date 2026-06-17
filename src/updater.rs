@@ -41,6 +41,31 @@ pub fn spawn_checker(on_ready: impl Fn(&str) + Send + 'static) {
         .expect("failed to spawn update checker thread");
 }
 
+/// The version this build reports as its own (overridable for testing).
+pub fn current_version() -> String {
+    std::env::var("STARVIEW_FAKE_VERSION").unwrap_or_else(|_| CURRENT.to_owned())
+}
+
+/// Runs one update check on a background thread (the network call can block for
+/// a while, and the caller is usually a UI thread). `on_done(Some(version))`
+/// fires once an update is downloaded and ready; `on_done(None)` if already up
+/// to date or the check failed.
+pub fn check_now(on_done: impl FnOnce(Option<String>) + Send + 'static) {
+    std::thread::Builder::new()
+        .name("update-check-manual".into())
+        .spawn(move || {
+            let found = match check_and_download() {
+                Ok(found) => found,
+                Err(err) => {
+                    eprintln!("manual update check failed: {err:#}");
+                    None
+                }
+            };
+            on_done(found);
+        })
+        .expect("failed to spawn manual update checker");
+}
+
 /// Launches the downloaded installer (silent, relaunches the app) and returns
 /// true if it started; the caller should quit the app right after.
 pub fn install_ready_update() -> bool {

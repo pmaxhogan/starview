@@ -64,6 +64,8 @@ icon (top-right of the panel) to reposition it anywhere on-screen (it won't go
 off the monitor edge, and the dragged spot persists until you pick a corner
 again); hold **Shift** and click the **✕** next to it to quit.
 
+Press **Ctrl+Alt+O** anywhere to show/hide the overlay (a global hotkey).
+
 On non-base layers, unmapped (transparent) keys show the base layer's label
 dimmed — matching QMK's fall-through semantics — while `KC_NO` keys stay blank.
 Physically held keys highlight, and the highlight fades out over ~3s after

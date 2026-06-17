@@ -31,6 +31,8 @@ pub enum AppEvent {
     Settings(Settings),
     /// Clear all accumulated key stats (tray menu).
     ResetStats,
+    /// Global hotkey toggled the overlay's visibility.
+    ToggleOverlay,
     /// Quit chosen from the tray menu.
     Quit,
 }
@@ -180,6 +182,8 @@ pub struct OverlayApp {
     key_hue: HashMap<usize, f32>,
     /// Test override (STARVIEW_FORCE_LAYER): pretend this layer is active.
     force_layer: Option<u8>,
+    /// Master visibility off-switch toggled by the global hotkey (Ctrl+Alt+O).
+    hidden: bool,
     /// Lifetime per-key press counts; drives the heatmap + total counter.
     stats: Stats,
     /// Tint each key by its press count (tray toggle).
@@ -247,6 +251,7 @@ impl OverlayApp {
             force_layer: std::env::var("STARVIEW_FORCE_LAYER")
                 .ok()
                 .and_then(|v| v.parse().ok()),
+            hidden: false,
             stats,
             heatmap: settings.heatmap,
             error_heatmap: settings.error_heatmap,
@@ -470,6 +475,7 @@ impl eframe::App for OverlayApp {
                         self.positioned = false; // re-anchor on next tick
                     }
                 }
+                AppEvent::ToggleOverlay => self.hidden = !self.hidden,
                 AppEvent::ResetStats => {
                     self.stats = Stats::default();
                     self.typed.clear();
@@ -596,9 +602,8 @@ impl eframe::App for OverlayApp {
         // stops presenting, so its swapchain kept the previous layer's frame
         // and flashed it on re-show — content-level hiding swaps in a single
         // frame instead. Forced mode also shows layer 0 for screenshots.
-        self.shown = self.force_layer.is_some()
-            || self.always
-            || (self.connected && self.layer != 0);
+        self.shown = !self.hidden
+            && (self.force_layer.is_some() || self.always || (self.connected && self.layer != 0));
 
         // Shift-drag via the panel's hamburger icon. The window is normally
         // click-through (WS_EX_TRANSPARENT) and never receives real mouse

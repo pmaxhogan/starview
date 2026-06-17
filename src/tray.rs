@@ -11,8 +11,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIconBuilder};
 use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, RegisterHotKey,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, TranslateMessage, WM_APP,
+    DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, TranslateMessage, WM_APP, WM_HOTKEY,
 };
 
 use crate::settings::{self, Corner, FADE_STEPS, OPACITY_STEPS, SIZE_STEPS, Settings, Theme};
@@ -21,8 +24,13 @@ use crate::updater;
 pub enum TrayEvent {
     Settings(Settings),
     ResetStats,
+    /// The global show/hide hotkey (Ctrl+Alt+O) was pressed.
+    ToggleOverlay,
     Quit,
 }
+
+/// Global hotkey id for the overlay show/hide toggle.
+const HOTKEY_TOGGLE: i32 = 1;
 
 static TRAY_THREAD: AtomicU32 = AtomicU32::new(0);
 static PENDING_UPDATE: Mutex<Option<UpdateState>> = Mutex::new(None);
@@ -162,11 +170,25 @@ fn run(
 
     TRAY_THREAD.store(unsafe { GetCurrentThreadId() }, Ordering::Relaxed);
 
+    // Global show/hide hotkey: Ctrl+Alt+O. WM_HOTKEY lands in this thread's
+    // message queue (hwnd = null), so the pump below picks it up. NOREPEAT so
+    // holding the keys fires once.
+    unsafe {
+        if RegisterHotKey(None, HOTKEY_TOGGLE, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, b'O' as u32)
+            .is_err()
+        {
+            eprintln!("could not register Ctrl+Alt+O hotkey (already in use?)");
+        }
+    }
+
     let mut msg = MSG::default();
     unsafe {
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
+            if msg.message == WM_HOTKEY && msg.wParam.0 as i32 == HOTKEY_TOGGLE {
+                on_event(TrayEvent::ToggleOverlay);
+            }
             // A checker thread wakes us with WM_APP when it has news (we're on
             // the tray thread here, so touching the menu items is fine).
             if let Some(state) = PENDING_UPDATE.lock().unwrap().take() {

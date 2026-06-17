@@ -24,8 +24,8 @@ Order is easy/low-risk first, then the data-model and harder ones.
   highlights; persisted.
 - [x] **Recent-layer breadcrumb** (v0.7.0) — fading "2 › 5 › 1" trail of the
   last few layers, centered at the panel top for ~2s after a switch.
-- [ ] **Global hotkey toggle** — `RegisterHotKey` to show/hide (pin) the overlay
-  on a configurable shortcut.
+- [x] **Global hotkey toggle** (v0.8.0) — Ctrl+Alt+O (`RegisterHotKey` on the
+  tray thread) toggles a master visibility off-switch.
 - [ ] **Multi-monitor placement** — choose which monitor the overlay docks to;
   persisted alongside corner.
 

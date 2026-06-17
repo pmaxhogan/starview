@@ -53,8 +53,10 @@ plus **Quit**.
 
 The typo heatmap counts a press as a typo only when it's deleted by a plain
 Backspace with no window switch in between; Ctrl/Alt+Backspace word-deletes and
-modified keystrokes (Ctrl+C, …) are excluded. In a heatmap a pressed key gets a
-bright ring so it stays visible against same-colored cells.
+modified keystrokes (Ctrl+C, …) are excluded. Any caret move that makes it
+ambiguous what was edited also discards the pending text — arrow keys and mouse
+use (an external mouse or the trackball, by click or movement). In a heatmap a
+pressed key gets a bright ring so it stays visible against same-colored cells.
 
 The overlay is click-through, so its on-panel controls are gated behind the
 Shift key to keep them out of the way: hold **Shift** and drag the hamburger

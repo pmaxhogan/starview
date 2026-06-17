@@ -160,6 +160,10 @@ pub struct OverlayApp {
     /// deletion; the per-entry window guards against counting edits made after
     /// switching apps. Bounded — typos get corrected within a few keystrokes.
     typed: Vec<(usize, isize)>,
+    /// Cursor position at the previous keystroke. A change means the mouse (or
+    /// the ZSA trackball, which also drives the OS cursor) moved the caret, so
+    /// the typo buffer no longer reflects what a backspace would delete.
+    last_cursor: Option<(i32, i32)>,
     /// Press counts changed since the last disk write.
     stats_dirty: bool,
     /// Last time `stats` was flushed to disk (debounces rapid typing).
@@ -210,6 +214,7 @@ impl OverlayApp {
             heatmap: settings.heatmap,
             error_heatmap: settings.error_heatmap,
             typed: Vec::new(),
+            last_cursor: None,
             stats_dirty: false,
             stats_saved: std::time::Instant::now(),
         }
@@ -248,6 +253,16 @@ impl OverlayApp {
     /// rather than blamed on the single key before it.
     fn track_typo(&mut self, i: usize) {
         const TYPED_CAP: usize = 64;
+        // Mouse use (external mouse or the ZSA trackball — both drive the OS
+        // cursor — plus any held mouse button) repositions the caret, so we
+        // can't tell what a backspace removes. Drop the buffer when the cursor
+        // moved since the last keystroke or a button is down. (Arrow keys are
+        // handled separately: they classify as Break, which also clears it.)
+        let (cursor, button) = pointer_state();
+        if pointer_invalidates(self.last_cursor, cursor, button) {
+            self.typed.clear();
+        }
+        self.last_cursor = cursor;
         let kind = self
             .effective_code(i)
             .as_deref()
@@ -368,6 +383,9 @@ impl eframe::App for OverlayApp {
                 AppEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                 AppEvent::Trackball(dx, dy) => {
                     self.ball_seen = true;
+                    // Pointing the trackball moves the caret target — abandon
+                    // the typo buffer so a later backspace isn't misattributed.
+                    self.typed.clear();
                     // Ease toward this motion window's direction instead of
                     // adding raw deltas — individual ~25ms windows are noisy
                     // and made the dot jitter during momentum spins.
@@ -1233,6 +1251,43 @@ fn shortcut_mods_down() -> bool {
     false
 }
 
+/// (cursor position, any mouse button down) for the typo tracker's "did the
+/// mouse move or click?" check. (None, false) off-Windows.
+#[cfg(windows)]
+fn pointer_state() -> (Option<(i32, i32)>, bool) {
+    (win32::cursor_pos(), win32::mouse_buttons_down())
+}
+#[cfg(not(windows))]
+fn pointer_state() -> (Option<(i32, i32)>, bool) {
+    (None, false)
+}
+
+/// Whether pointer activity since the last keystroke should void the typo
+/// buffer: any mouse button held, or the cursor moved from where it was. A
+/// missing reading (first keystroke / off-Windows) is treated as no movement.
+fn pointer_invalidates(last: Option<(i32, i32)>, now: Option<(i32, i32)>, button: bool) -> bool {
+    button || matches!((last, now), (Some(a), Some(b)) if a != b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pointer_invalidation() {
+        // Cursor sat still and no button: keep the buffer.
+        assert!(!pointer_invalidates(Some((5, 5)), Some((5, 5)), false));
+        // Cursor moved: void it.
+        assert!(pointer_invalidates(Some((5, 5)), Some((6, 5)), false));
+        assert!(pointer_invalidates(Some((5, 5)), Some((5, 6)), false));
+        // A held mouse button voids it even without movement.
+        assert!(pointer_invalidates(Some((5, 5)), Some((5, 5)), true));
+        // First reading (or no cursor) isn't movement on its own.
+        assert!(!pointer_invalidates(None, Some((5, 5)), false));
+        assert!(pointer_invalidates(None, Some((5, 5)), true));
+    }
+}
+
 #[cfg(windows)]
 mod win32 {
     use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
@@ -1241,7 +1296,8 @@ mod win32 {
         GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetAsyncKeyState, VK_CONTROL, VK_LBUTTON, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+        GetAsyncKeyState, VK_CONTROL, VK_LBUTTON, VK_LWIN, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_RWIN,
+        VK_SHIFT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         GWL_EXSTYLE, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, LWA_ALPHA,
@@ -1269,6 +1325,15 @@ mod win32 {
 
     pub fn lbutton_down() -> bool {
         unsafe { (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0 }
+    }
+
+    /// True when any mouse button (left/right/middle) is currently held — a
+    /// click repositions the caret, invalidating the typo buffer.
+    pub fn mouse_buttons_down() -> bool {
+        unsafe {
+            let down = |vk: i32| (GetAsyncKeyState(vk) as u16 & 0x8000) != 0;
+            down(VK_LBUTTON.0 as i32) || down(VK_RBUTTON.0 as i32) || down(VK_MBUTTON.0 as i32)
+        }
     }
 
     /// True when any of Ctrl/Alt/Win is held — i.e. the keypress is a shortcut

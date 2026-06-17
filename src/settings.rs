@@ -112,6 +112,8 @@ pub struct Settings {
     pub show_fingers: bool,
     /// Show the most frequent bigrams in the header.
     pub show_bigrams: bool,
+    /// Show today's press count and the daily streak in the header.
+    pub show_daily: bool,
 }
 
 impl Default for Settings {
@@ -131,6 +133,7 @@ impl Default for Settings {
             show_wpm: false,
             show_fingers: false,
             show_bigrams: false,
+            show_daily: false,
         }
     }
 }

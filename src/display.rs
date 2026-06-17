@@ -61,3 +61,15 @@ pub fn monitors() -> Vec<Monitor> {
 pub fn monitors() -> Vec<Monitor> {
     Vec::new()
 }
+
+/// Today's local date as "YYYY-MM-DD", for the per-day stats buckets.
+#[cfg(windows)]
+pub fn today() -> String {
+    let st = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    format!("{:04}-{:02}-{:02}", st.wYear, st.wMonth, st.wDay)
+}
+
+#[cfg(not(windows))]
+pub fn today() -> String {
+    "1970-01-01".to_owned()
+}

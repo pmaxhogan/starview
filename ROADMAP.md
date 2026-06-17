@@ -39,8 +39,9 @@ Order is easy/low-risk first, then the data-model and harder ones.
   gap; tray toggle.
 - [x] **Bigram frequency** (v0.12.0) — counts consecutive character pairs
   (persisted); "Show top bigrams" toggle lists the top 5 in the header.
-- [ ] **Daily counts & streaks** — per-day press totals + streak, keyed by local
-  date (Win32 local time); persisted in stats.
+- [x] **Daily counts & streaks** (v0.13.0) — per-day press totals keyed by local
+  date (Win32 GetLocalTime), with a consecutive-day streak; "Show daily count &
+  streak" toggle shows "N today · Sd" in the header.
 - [ ] **Time-windowed views** — today / this week / all-time toggle for the
   heatmap + counters, from per-day buckets.
 - [ ] **Export / stats window** — an egui window (or file export) summarizing

@@ -200,6 +200,10 @@ pub struct OverlayApp {
     show_fingers: bool,
     /// Show top bigrams in the header (tray toggle).
     show_bigrams: bool,
+    /// Show today's count + streak in the header (tray toggle).
+    show_daily: bool,
+    /// Today's local date ("YYYY-MM-DD"), refreshed each tick for daily buckets.
+    today: String,
     /// Previous character typed, for counting consecutive bigrams. Cleared by
     /// anything that breaks the typing run (backspace, nav, mouse, …).
     last_char: Option<String>,
@@ -274,6 +278,8 @@ impl OverlayApp {
             show_wpm: settings.show_wpm,
             show_fingers: settings.show_fingers,
             show_bigrams: settings.show_bigrams,
+            show_daily: settings.show_daily,
+            today: crate::display::today(),
             last_char: None,
             wpm_times: Vec::new(),
             scale: settings.scale,
@@ -460,6 +466,8 @@ impl eframe::App for OverlayApp {
     /// Runs even while the window is hidden (whenever a repaint is requested —
     /// the HID watcher requests one per event), so show/hide decisions live here.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // Keep today's date current for the per-day stats buckets.
+        self.today = crate::display::today();
         // Drain into a Vec first so the loop body can call &mut self methods
         // (e.g. track_typo) without holding a borrow on self.events.
         let events: Vec<AppEvent> = self.events.try_iter().collect();
@@ -494,6 +502,7 @@ impl eframe::App for OverlayApp {
                         self.released.remove(&i);
                         // Tally the lifetime press count (heatmap + counter).
                         self.stats.record(i);
+                        self.stats.record_day(&self.today);
                         self.stats_dirty = true;
                         self.track_typo(i);
                         // Capture the current rainbow hue so this key (and its
@@ -530,6 +539,7 @@ impl eframe::App for OverlayApp {
                     self.show_wpm = s.show_wpm;
                     self.show_fingers = s.show_fingers;
                     self.show_bigrams = s.show_bigrams;
+                    self.show_daily = s.show_daily;
                     set_theme(s.theme);
                     // Re-show at full opacity and restart the timer on change.
                     self.last_activity = std::time::Instant::now();
@@ -881,6 +891,13 @@ impl eframe::App for OverlayApp {
         let wpm = self.show_wpm.then(|| self.current_wpm());
         let finger_load = self.show_fingers.then_some(&self.stats);
         let bigrams = self.show_bigrams.then_some(&self.stats);
+        let daily = self.show_daily.then(|| {
+            format!(
+                "{} today  \u{00B7}  {}d",
+                group_thousands(self.stats.day_count(&self.today)),
+                self.stats.streak(&self.today)
+            )
+        });
         let panel = if !keys.is_empty() && keys.len() == geometry::MOONLANDER_KEYS.len() {
             draw_board(
                 ui,
@@ -897,6 +914,7 @@ impl eframe::App for OverlayApp {
                 wpm,
                 finger_load,
                 bigrams,
+                daily,
                 align,
             )
         } else {
@@ -1150,6 +1168,7 @@ fn draw_board(
     wpm: Option<u32>,
     finger_load: Option<&Stats>,
     bigrams: Option<&Stats>,
+    daily: Option<String>,
     align: Align2,
 ) -> Rect {
     let now = std::time::Instant::now();
@@ -1201,6 +1220,8 @@ fn draw_board(
         } else {
             top.iter().map(|(b, _)| b.clone()).collect::<Vec<_>>().join("   ")
         };
+        painter.text(readout_at, Align2::RIGHT_TOP, text, FontId::proportional(11.0), p.text_inherited);
+    } else if let Some(text) = daily {
         painter.text(readout_at, Align2::RIGHT_TOP, text, FontId::proportional(11.0), p.text_inherited);
     } else if let Some(stats) = error {
         // Resolve a key's character label, following transparency to base.

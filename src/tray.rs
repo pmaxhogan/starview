@@ -159,6 +159,7 @@ fn run(
     let wpm = CheckMenuItem::new("Show typing speed", true, initial.show_wpm, None);
     let fingers = CheckMenuItem::new("Finger load chart", true, initial.show_fingers, None);
     let bigrams = CheckMenuItem::new("Show top bigrams", true, initial.show_bigrams, None);
+    let daily = CheckMenuItem::new("Show daily count & streak", true, initial.show_daily, None);
     let reset_stats = MenuItem::new("Reset key stats", true, None);
     // Disabled label showing the running version. Enabled "Up to date" item
     // below doubles as a manual "check for updates" button.
@@ -180,6 +181,7 @@ fn run(
     menu.append(&wpm)?;
     menu.append(&fingers)?;
     menu.append(&bigrams)?;
+    menu.append(&daily)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&reset_stats)?;
     menu.append(&PredefinedMenuItem::separator())?;
@@ -270,6 +272,8 @@ fn run(
                     state.show_fingers = fingers.is_checked();
                 } else if *event.id() == bigrams.id() {
                     state.show_bigrams = bigrams.is_checked();
+                } else if *event.id() == daily.id() {
+                    state.show_daily = daily.is_checked();
                 } else if *event.id() == reset_stats.id() {
                     on_event(TrayEvent::ResetStats);
                     continue;

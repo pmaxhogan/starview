@@ -18,5 +18,5 @@ reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls", "gzi
 # default-features = false drops wgpu; glow is required for transparency on Windows
 eframe = { version = "0.34.3", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
 raw-window-handle = "0.6"
-windows = { version = "0.62.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_UI_Input", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"] }
+windows = { version = "0.62.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_UI_Input", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_System_SystemInformation"] }
 tray-icon = "0.24.1"

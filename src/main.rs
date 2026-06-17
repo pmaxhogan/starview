@@ -19,9 +19,6 @@ mod updater;
 
 use eframe::egui;
 
-const DEFAULT_LAYOUT: &str = "jmvGw";
-const DEFAULT_GEOMETRY: &str = "moonlander";
-
 /// egui's default fonts have no plain-arrow glyphs (←↑→↓) and miss most of
 /// the symbols people put in Oryx custom labels. Append Windows' Segoe UI
 /// Symbol as a fallback so those render instead of tofu.
@@ -55,11 +52,24 @@ fn main() -> eframe::Result {
         eprintln!("unknown flag {flag} (known: --always)");
     }
     let mut positional = positional.into_iter();
-    let layout_id = positional.next().unwrap_or_else(|| DEFAULT_LAYOUT.to_owned());
-    let geometry = positional.next().unwrap_or_else(|| DEFAULT_GEOMETRY.to_owned());
+    let arg_layout = positional.next();
+    let arg_geometry = positional.next();
 
     let mut cfg = settings::load();
     cfg.pin_base |= always;
+
+    // Resolve the layout: a command-line argument wins and is remembered;
+    // otherwise use the last-saved layout (which defaults to jmvGw/moonlander).
+    let layout_id = arg_layout.clone().unwrap_or_else(|| cfg.layout_id.clone());
+    let geometry = arg_geometry.clone().unwrap_or_else(|| cfg.geometry.clone());
+    if (arg_layout.is_some() && layout_id != cfg.layout_id)
+        || (arg_geometry.is_some() && geometry != cfg.geometry)
+    {
+        cfg.layout_id = layout_id.clone();
+        cfg.geometry = geometry.clone();
+        settings::save(&cfg);
+        eprintln!("remembered layout {layout_id} ({geometry})");
+    }
 
     let stats = stats::load();
 
@@ -117,7 +127,7 @@ fn main() -> eframe::Result {
 
                 let ctx = cc.egui_ctx.clone();
                 let tray_tx = tx.clone();
-                tray::spawn(cfg, move |event| {
+                tray::spawn(cfg.clone(), move |event| {
                     let _ = tray_tx.send(match event {
                         tray::TrayEvent::Settings(s) => overlay::AppEvent::Settings(s),
                         tray::TrayEvent::ResetStats => overlay::AppEvent::ResetStats,

@@ -76,11 +76,15 @@ dimmed — matching QMK's fall-through semantics — while `KC_NO` keys stay bla
 Physically held keys highlight, and the highlight fades out over ~3s after
 release.
 
-Defaults are baked in (`jmvGw` / `moonlander`) — the hash id and geometry come
-straight from your Oryx URL: `configure.zsa.io/{geometry}/layouts/{hashId}/...`.
-The layout must be public in Oryx. Layer names are fetched once at startup and
-cached in `%LOCALAPPDATA%\starview`, so it works offline after the first run.
-If the fetch fails entirely, the overlay falls back to layer numbers.
+Pass your layout once — `starview {hashId} {geometry}` — and it's remembered in
+settings for future runs (defaulting to `jmvGw` / `moonlander`). The hash id and
+geometry come straight from your Oryx URL:
+`configure.zsa.io/{geometry}/layouts/{hashId}/...`. (The board reports layer/key
+events over raw HID but not its Oryx hash, so the layout can't be detected from
+the device itself — hence the remembered setting.) The layout must be public in
+Oryx. Layer names are fetched once at startup and cached in
+`%LOCALAPPDATA%\starview`, so it works offline after the first run. If the fetch
+fails entirely, the overlay falls back to layer numbers.
 
 The installer's "Start starview when Windows starts" task handles autostart
 (an HKCU Run registry entry). For source builds: `Win+R` → `shell:startup` →

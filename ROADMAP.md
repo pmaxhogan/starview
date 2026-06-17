@@ -54,8 +54,9 @@ Order is easy/low-risk first, then the data-model and harder ones.
 
 ## Hardware / layout
 
-- [ ] **Auto-detect layout** — discover the connected board's layout instead of
-  the hardcoded hash. Best-feasible: persist the chosen layout id in settings
-  and remember it across runs; investigate reading it from the device.
+- [x] **Auto-detect layout** (v0.17.0) — layout id/geometry now persist in
+  settings and are remembered across runs (a CLI arg sets + saves them). True
+  device-side detection isn't possible: the board exposes layer/key events over
+  raw HID but not its Oryx hash.
 
 _Not selected: support for other ZSA boards (Voyager/Ergodox)._

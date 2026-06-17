@@ -102,7 +102,7 @@ impl Corner {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct Settings {
     /// Keep the overlay up on the base layer too.
@@ -140,6 +140,11 @@ pub struct Settings {
     pub heatmap_range: TimeWindow,
     /// Show the most common substitution confusions in the header.
     pub show_subs: bool,
+    /// Oryx layout hash id to fetch layer names/keys for. Remembered across
+    /// runs; a command-line argument overrides and updates it.
+    pub layout_id: String,
+    /// Board geometry id (e.g. "moonlander").
+    pub geometry: String,
 }
 
 impl Default for Settings {
@@ -162,9 +167,15 @@ impl Default for Settings {
             show_daily: false,
             heatmap_range: TimeWindow::AllTime,
             show_subs: false,
+            layout_id: DEFAULT_LAYOUT.to_owned(),
+            geometry: DEFAULT_GEOMETRY.to_owned(),
         }
     }
 }
+
+/// Default Oryx layout hash and board geometry (used until overridden).
+pub const DEFAULT_LAYOUT: &str = "jmvGw";
+pub const DEFAULT_GEOMETRY: &str = "moonlander";
 
 /// Opacity choices offered in the tray menu.
 pub const OPACITY_STEPS: [u8; 5] = [100, 85, 70, 55, 40];

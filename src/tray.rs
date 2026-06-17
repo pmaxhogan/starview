@@ -163,6 +163,7 @@ fn run(
     let fingers = CheckMenuItem::new("Finger load chart", true, initial.show_fingers, None);
     let bigrams = CheckMenuItem::new("Show top bigrams", true, initial.show_bigrams, None);
     let daily = CheckMenuItem::new("Show daily count & streak", true, initial.show_daily, None);
+    let subs = CheckMenuItem::new("Show typo confusions", true, initial.show_subs, None);
     let range_items: Vec<(TimeWindow, CheckMenuItem)> = TimeWindow::ALL
         .into_iter()
         .map(|w| {
@@ -197,6 +198,7 @@ fn run(
     menu.append(&fingers)?;
     menu.append(&bigrams)?;
     menu.append(&daily)?;
+    menu.append(&subs)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&export_stats)?;
     menu.append(&reset_stats)?;
@@ -290,6 +292,8 @@ fn run(
                     state.show_bigrams = bigrams.is_checked();
                 } else if *event.id() == daily.id() {
                     state.show_daily = daily.is_checked();
+                } else if *event.id() == subs.id() {
+                    state.show_subs = subs.is_checked();
                 } else if let Some((range, _)) =
                     range_items.iter().find(|(_, item)| *event.id() == item.id())
                 {

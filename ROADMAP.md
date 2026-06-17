@@ -48,9 +48,9 @@ Order is easy/low-risk first, then the data-model and harder ones.
 - [x] **Export / stats window** (v0.15.0) — "Export stats…" tray item writes a
   full text report (totals, top keys, finger load, hand balance, bigrams, typo
   keys, 7-day history) and opens it.
-- [ ] **Substitution-pair typos** — when a backspaced char is replaced by a
-  different one (same window, no mouse), record the (typed→meant) pair; show top
-  confusions. Fuzzy by nature.
+- [x] **Substitution-pair typos** (v0.16.0) — when a backspaced char is replaced
+  by a different one, record the (typed→meant) pair; "Show typo confusions"
+  toggle lists the top pairs, also in the export report.
 
 ## Hardware / layout
 

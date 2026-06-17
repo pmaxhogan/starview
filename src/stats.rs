@@ -36,6 +36,10 @@ pub struct Stats {
     /// complete lifetime history for the all-time view.
     #[serde(default)]
     pub daily_keys: HashMap<String, HashMap<usize, u64>>,
+    /// Substitution confusions: typed a char, backspaced it, typed a different
+    /// one. Keyed "from→to".
+    #[serde(default)]
+    pub substitutions: HashMap<String, u64>,
 }
 
 impl Stats {
@@ -81,6 +85,20 @@ impl Stats {
     /// One more press for a key on a given day (for time-windowed heatmaps).
     pub fn record_key_day(&mut self, day: &str, key: usize) {
         *self.daily_keys.entry(day.to_owned()).or_default().entry(key).or_insert(0) += 1;
+    }
+
+    /// Record a substitution: typed `from`, deleted it, typed `to` instead.
+    pub fn record_substitution(&mut self, from: &str, to: &str) {
+        *self.substitutions.entry(format!("{from}\u{2192}{to}")).or_insert(0) += 1;
+    }
+
+    /// The `n` most frequent substitution confusions, highest first.
+    pub fn top_substitutions(&self, n: usize) -> Vec<(String, u64)> {
+        let mut v: Vec<(String, u64)> =
+            self.substitutions.iter().map(|(k, c)| (k.clone(), *c)).collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        v.truncate(n);
+        v
     }
 
     /// Aggregate per-key presses over the given days (for a windowed heatmap).
@@ -220,6 +238,17 @@ mod tests {
     }
 
     #[test]
+    fn substitutions_rank_and_key() {
+        let mut s = Stats::default();
+        s.record_substitution("R", "T");
+        s.record_substitution("R", "T");
+        s.record_substitution("E", "A");
+        let top = s.top_substitutions(5);
+        assert_eq!(top[0], ("R\u{2192}T".to_owned(), 2));
+        assert_eq!(top[1].0, "E\u{2192}A");
+    }
+
+    #[test]
     fn records_and_counts() {
         let mut s = Stats::default();
         for _ in 0..3 {
@@ -323,6 +352,15 @@ impl Stats {
             );
         }
         let _ = writeln!(s);
+
+        let subs = self.top_substitutions(10);
+        if !subs.is_empty() {
+            let _ = writeln!(s, "Common confusions (typed -> meant)");
+            for (pair, c) in subs {
+                let _ = writeln!(s, "  {:<8} {}", pair, commas(c));
+            }
+            let _ = writeln!(s);
+        }
 
         let _ = writeln!(s, "Recent days");
         for d in recent_days(today, 7) {

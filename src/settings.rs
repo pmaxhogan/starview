@@ -138,6 +138,8 @@ pub struct Settings {
     pub show_daily: bool,
     /// Time range for the press heatmap + its total counter.
     pub heatmap_range: TimeWindow,
+    /// Show the most common substitution confusions in the header.
+    pub show_subs: bool,
 }
 
 impl Default for Settings {
@@ -159,6 +161,7 @@ impl Default for Settings {
             show_bigrams: false,
             show_daily: false,
             heatmap_range: TimeWindow::AllTime,
+            show_subs: false,
         }
     }
 }

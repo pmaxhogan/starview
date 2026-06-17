@@ -218,6 +218,11 @@ pub struct OverlayApp {
     /// Previous character typed, for counting consecutive bigrams. Cleared by
     /// anything that breaks the typing run (backspace, nav, mouse, …).
     last_char: Option<String>,
+    /// Show common substitution confusions in the header (tray toggle).
+    show_subs: bool,
+    /// Char just deleted by a backspace, awaiting its replacement to record a
+    /// (typed → meant) substitution. Cleared if anything but a char follows.
+    pending_correction: Option<String>,
     /// Timestamps of recent character keypresses, for the rolling WPM window.
     wpm_times: Vec<std::time::Instant>,
     /// Overlay size percent (UI zoom factor); 100 = default.
@@ -293,6 +298,8 @@ impl OverlayApp {
             heatmap_range: settings.heatmap_range,
             today: crate::display::today(),
             last_char: None,
+            show_subs: settings.show_subs,
+            pending_correction: None,
             wpm_times: Vec::new(),
             scale: settings.scale,
             applied_scale: None,
@@ -345,6 +352,7 @@ impl OverlayApp {
         if pointer_invalidates(self.last_cursor, cursor, button) {
             self.typed.clear();
             self.last_char = None;
+            self.pending_correction = None;
         }
         self.last_cursor = cursor;
         let code = self.effective_code(i);
@@ -360,6 +368,7 @@ impl OverlayApp {
             keycodes::KeyKind::Text if shortcut => {
                 self.typed.clear();
                 self.last_char = None;
+                self.pending_correction = None;
             }
             keycodes::KeyKind::Text => {
                 self.typed.push((i, fg));
@@ -375,6 +384,15 @@ impl OverlayApp {
                     .and_then(keycodes::key_label)
                     .map(str::to_owned)
                     .filter(|s| !s.is_empty());
+                // A char right after a backspace-delete is the correction:
+                // record the (deleted → typed) substitution if they differ.
+                if let Some(deleted) = self.pending_correction.take()
+                    && let Some(typed) = &ch
+                    && *typed != deleted
+                {
+                    self.stats.record_substitution(&deleted, typed);
+                    self.stats_dirty = true;
+                }
                 if let Some(ch) = ch {
                     if let Some(prev) = self.last_char.take() {
                         self.stats.record_bigram(&prev, &ch);
@@ -390,19 +408,24 @@ impl OverlayApp {
             keycodes::KeyKind::Backspace if shortcut => {
                 self.typed.clear();
                 self.last_char = None;
+                self.pending_correction = None;
             }
             keycodes::KeyKind::Backspace => {
+                self.pending_correction = None;
                 if let Some((prev_i, prev_fg)) = self.typed.pop()
                     && prev_fg == fg
                 {
                     self.stats.record_delete(prev_i);
                     self.stats_dirty = true;
+                    // Remember the deleted char; the next char is its correction.
+                    self.pending_correction = self.char_of(prev_i);
                 }
                 self.last_char = None; // a deletion breaks the bigram run
             }
             keycodes::KeyKind::Break => {
                 self.typed.clear();
                 self.last_char = None;
+                self.pending_correction = None;
             }
             keycodes::KeyKind::Other => {}
         }
@@ -462,6 +485,15 @@ impl OverlayApp {
             .filter(|t| now.duration_since(**t).as_secs_f32() <= WPM_WINDOW)
             .count();
         (n as f32 * 12.0 / WPM_WINDOW).round() as u32
+    }
+
+    /// The character a key produces on the active layer, if it's a text key.
+    fn char_of(&self, i: usize) -> Option<String> {
+        self.effective_code(i)
+            .as_deref()
+            .and_then(keycodes::key_label)
+            .map(str::to_owned)
+            .filter(|s| !s.is_empty())
     }
 
     /// Display label for a key from the base layer (for the stats report),
@@ -596,6 +628,7 @@ impl eframe::App for OverlayApp {
                     self.key_hue.clear();
                     self.typed.clear();
                     self.last_char = None;
+                    self.pending_correction = None;
                 }
                 AppEvent::Layout(info) => self.layout = Some(info),
                 AppEvent::Settings(s) => {
@@ -612,6 +645,7 @@ impl eframe::App for OverlayApp {
                     self.show_bigrams = s.show_bigrams;
                     self.show_daily = s.show_daily;
                     self.heatmap_range = s.heatmap_range;
+                    self.show_subs = s.show_subs;
                     set_theme(s.theme);
                     // Re-show at full opacity and restart the timer on change.
                     self.last_activity = std::time::Instant::now();
@@ -630,6 +664,7 @@ impl eframe::App for OverlayApp {
                     self.stats = Stats::default();
                     self.typed.clear();
                     self.last_char = None;
+                    self.pending_correction = None;
                     stats::save(&self.stats);
                     self.stats_dirty = false;
                 }
@@ -640,6 +675,7 @@ impl eframe::App for OverlayApp {
                     // the typo buffer so a later backspace isn't misattributed.
                     self.typed.clear();
                     self.last_char = None;
+                    self.pending_correction = None;
                     // Ease toward this motion window's direction instead of
                     // adding raw deltas — individual ~25ms windows are noisy
                     // and made the dot jitter during momentum spins.
@@ -964,6 +1000,7 @@ impl eframe::App for OverlayApp {
         let wpm = self.show_wpm.then(|| self.current_wpm());
         let finger_load = self.show_fingers.then_some(&self.stats);
         let bigrams = self.show_bigrams.then_some(&self.stats);
+        let subs = self.show_subs.then_some(&self.stats);
         let daily = self.show_daily.then(|| {
             format!(
                 "{} today  \u{00B7}  {}d",
@@ -987,6 +1024,7 @@ impl eframe::App for OverlayApp {
                 wpm,
                 finger_load,
                 bigrams,
+                subs,
                 daily,
                 align,
             )
@@ -1241,6 +1279,7 @@ fn draw_board(
     wpm: Option<u32>,
     finger_load: Option<&Stats>,
     bigrams: Option<&Stats>,
+    subs: Option<&Stats>,
     daily: Option<String>,
     align: Align2,
 ) -> Rect {
@@ -1295,6 +1334,14 @@ fn draw_board(
         };
         painter.text(readout_at, Align2::RIGHT_TOP, text, FontId::proportional(11.0), p.text_inherited);
     } else if let Some(text) = daily {
+        painter.text(readout_at, Align2::RIGHT_TOP, text, FontId::proportional(11.0), p.text_inherited);
+    } else if let Some(stats) = subs {
+        let top = stats.top_substitutions(4);
+        let text = if top.is_empty() {
+            "no confusions yet".to_owned()
+        } else {
+            top.iter().map(|(s, _)| s.clone()).collect::<Vec<_>>().join("   ")
+        };
         painter.text(readout_at, Align2::RIGHT_TOP, text, FontId::proportional(11.0), p.text_inherited);
     } else if let Some(stats) = error {
         // Resolve a key's character label, following transparency to base.

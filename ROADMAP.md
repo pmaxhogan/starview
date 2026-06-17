@@ -19,8 +19,9 @@ Order is easy/low-risk first, then the data-model and harder ones.
   so this keeps working as new stat kinds are added.)
 - [x] **Adjustable size/scale** (v0.5.0) — tray submenu (75/100/125/150/200%)
   sets the UI zoom factor and resizes the window to match; persisted.
-- [ ] **Color theme options** — tray submenu of a few accent/panel presets;
-  palette() reads the chosen theme; persisted.
+- [x] **Color theme options** (v0.6.0) — "Accent color" tray submenu
+  (Blue/Green/Purple/Amber/Pink); accent drives key ghosts, trackball, and UI
+  highlights; persisted.
 - [ ] **Recent-layer breadcrumb** — momentary toast / small trail of the last
   few layers on switch, fading out.
 - [ ] **Global hotkey toggle** — `RegisterHotKey` to show/hide (pin) the overlay

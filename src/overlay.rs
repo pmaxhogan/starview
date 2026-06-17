@@ -7,6 +7,7 @@
 //! `logic` tick (a no-op compare once stable).
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::Receiver;
 
 use eframe::egui;
@@ -74,6 +75,21 @@ struct Palette {
     hold_text: Color32,
     key_fill: Color32,
     key_blank: Color32,
+    /// Accent for key ghosts, the trackball dot, and UI highlights (themable).
+    accent: Color32,
+}
+
+/// Selected accent theme (`settings::Theme` discriminant), set by the overlay
+/// so the free-standing draw helpers can read it without threading it through.
+static THEME: AtomicU8 = AtomicU8::new(0);
+
+fn set_theme(theme: settings::Theme) {
+    THEME.store(theme as u8, Ordering::Relaxed);
+}
+
+fn accent_color() -> Color32 {
+    let (r, g, b) = settings::Theme::from_index(THEME.load(Ordering::Relaxed)).accent();
+    Color32::from_rgb(r, g, b)
 }
 
 fn palette() -> Palette {
@@ -89,6 +105,7 @@ fn palette() -> Palette {
             hold_text: Color32::from_rgba_unmultiplied(225, 228, 250, 255),
             key_fill: Color32::from_rgba_unmultiplied(255, 255, 255, 60),
             key_blank: Color32::from_rgba_unmultiplied(255, 255, 255, 22),
+            accent: accent_color(),
         }
     } else {
         Palette {
@@ -98,6 +115,7 @@ fn palette() -> Palette {
             hold_text: Color32::from_rgba_unmultiplied(200, 205, 235, 200),
             key_fill: Color32::from_rgba_unmultiplied(255, 255, 255, 32),
             key_blank: Color32::from_rgba_unmultiplied(255, 255, 255, 10),
+            accent: accent_color(),
         }
     }
 }
@@ -189,6 +207,7 @@ impl OverlayApp {
         settings: Settings,
         stats: Stats,
     ) -> Self {
+        set_theme(settings.theme);
         Self {
             events,
             layout,
@@ -386,6 +405,7 @@ impl eframe::App for OverlayApp {
                     self.heatmap = s.heatmap;
                     self.error_heatmap = s.error_heatmap;
                     self.scale = s.scale;
+                    set_theme(s.theme);
                     // Re-show at full opacity and restart the timer on change.
                     self.last_activity = std::time::Instant::now();
                     let pos = s.position.map(|(x, y)| pos2(x, y));
@@ -736,10 +756,11 @@ fn control_color(hot: bool) -> Color32 {
 /// Soft accent backing drawn behind a header control while it's armed.
 fn control_bg(painter: &egui::Painter, rect: Rect, hot: bool) {
     if hot {
+        let a = accent_color();
         painter.rect_filled(
             rect.expand(4.0),
             CornerRadius::same(4),
-            Color32::from_rgba_unmultiplied(110, 165, 255, 70),
+            Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), 70),
         );
     }
 }
@@ -802,13 +823,13 @@ fn emphasized_font_size(label: &str, scale: f32) -> Option<f32> {
 /// in rainbow mode the key's hue captured at press time (HSL with a fixed
 /// lightness so every hue reads at the same brightness — HSV would make
 /// yellow/cyan glow far brighter), at the given alpha.
-fn ghost_color(key_hue: Option<&HashMap<usize, f32>>, i: usize, alpha: u8) -> Color32 {
+fn ghost_color(key_hue: Option<&HashMap<usize, f32>>, i: usize, alpha: u8, accent: Color32) -> Color32 {
     match key_hue.and_then(|m| m.get(&i)) {
         Some(&hue) => {
             let (r, g, b) = hsl_rgb(hue, 0.85, 0.62);
             Color32::from_rgba_unmultiplied(r, g, b, alpha)
         }
-        None => Color32::from_rgba_unmultiplied(110, 165, 255, alpha),
+        None => Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), alpha),
     }
 }
 
@@ -1072,7 +1093,7 @@ fn draw_board(
         } else {
             0
         };
-        let accent = (accent_alpha > 0).then(|| ghost_color(key_hue, i, accent_alpha));
+        let accent = (accent_alpha > 0).then(|| ghost_color(key_hue, i, accent_alpha, p.accent));
         // In a heatmap, the colored press accent can blend into a same-hue
         // cell, hiding which key is live. Add a bright ring (brightest while
         // held, fading with the afterglow) — it reads against any fill because
@@ -1185,6 +1206,7 @@ fn draw_board(
         // Comet trail: a fading streak through the dot's recent path, drawn
         // oldest (faint, thin) to newest, ending at the live dot.
         let path: Vec<egui::Pos2> = trail.iter().map(|v| dot_pos(*v)).chain([dot]).collect();
+        let acc = p.accent;
         if path.len() >= 2 {
             let segs = (path.len() - 1) as f32;
             for (i, w) in path.windows(2).enumerate() {
@@ -1193,7 +1215,7 @@ fn draw_board(
                     [w[0], w[1]],
                     egui::Stroke::new(
                         0.8 + 2.4 * f,
-                        Color32::from_rgba_unmultiplied(110, 165, 255, (120.0 * f) as u8),
+                        Color32::from_rgba_unmultiplied(acc.r(), acc.g(), acc.b(), (120.0 * f) as u8),
                     ),
                 );
             }
@@ -1205,7 +1227,7 @@ fn draw_board(
         painter.circle_filled(
             dot,
             radius * 0.30,
-            Color32::from_rgba_unmultiplied(110, 165, 255, alpha),
+            Color32::from_rgba_unmultiplied(acc.r(), acc.g(), acc.b(), alpha),
         );
     }
     rect

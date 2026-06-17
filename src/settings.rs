@@ -5,6 +5,53 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// Accent color theme for key ghosts, the trackball dot, and UI highlights.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Theme {
+    #[default]
+    Blue,
+    Green,
+    Purple,
+    Amber,
+    Pink,
+}
+
+impl Theme {
+    pub const ALL: [Theme; 5] = [
+        Theme::Blue,
+        Theme::Green,
+        Theme::Purple,
+        Theme::Amber,
+        Theme::Pink,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Theme::Blue => "Blue",
+            Theme::Green => "Green",
+            Theme::Purple => "Purple",
+            Theme::Amber => "Amber",
+            Theme::Pink => "Pink",
+        }
+    }
+
+    /// The accent's sRGB bytes.
+    pub fn accent(self) -> (u8, u8, u8) {
+        match self {
+            Theme::Blue => (110, 165, 255),
+            Theme::Green => (110, 220, 140),
+            Theme::Purple => (180, 140, 255),
+            Theme::Amber => (255, 190, 90),
+            Theme::Pink => (255, 130, 200),
+        }
+    }
+
+    pub fn from_index(i: u8) -> Theme {
+        Theme::ALL.get(i as usize).copied().unwrap_or(Theme::Blue)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Corner {
@@ -55,6 +102,8 @@ pub struct Settings {
     pub error_heatmap: bool,
     /// Overlay size, percent (scales the whole panel via the UI zoom factor).
     pub scale: u8,
+    /// Accent color theme.
+    pub theme: Theme,
 }
 
 impl Default for Settings {
@@ -69,6 +118,7 @@ impl Default for Settings {
             heatmap: false,
             error_heatmap: false,
             scale: 100,
+            theme: Theme::Blue,
         }
     }
 }

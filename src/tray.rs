@@ -15,7 +15,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, TranslateMessage, WM_APP,
 };
 
-use crate::settings::{self, Corner, FADE_STEPS, OPACITY_STEPS, SIZE_STEPS, Settings};
+use crate::settings::{self, Corner, FADE_STEPS, OPACITY_STEPS, SIZE_STEPS, Settings, Theme};
 use crate::updater;
 
 pub enum TrayEvent {
@@ -113,6 +113,14 @@ fn run(
     for (_, item) in &fade_items {
         fade_menu.append(item)?;
     }
+    let theme_items: Vec<(Theme, CheckMenuItem)> = Theme::ALL
+        .into_iter()
+        .map(|t| (t, CheckMenuItem::new(t.label(), true, t == initial.theme, None)))
+        .collect();
+    let theme_menu = Submenu::new("Accent color", true);
+    for (_, item) in &theme_items {
+        theme_menu.append(item)?;
+    }
     let rainbow = CheckMenuItem::new("Rainbow key ghosts", true, initial.rainbow, None);
     let heatmap = CheckMenuItem::new("Key heatmap", true, initial.heatmap, None);
     let error_heatmap = CheckMenuItem::new("Typo heatmap", true, initial.error_heatmap, None);
@@ -129,6 +137,7 @@ fn run(
     menu.append(&opacity_menu)?;
     menu.append(&size_menu)?;
     menu.append(&fade_menu)?;
+    menu.append(&theme_menu)?;
     menu.append(&rainbow)?;
     menu.append(&heatmap)?;
     menu.append(&error_heatmap)?;
@@ -178,6 +187,13 @@ fn run(
                 if *event.id() == pin.id() {
                     // muda already toggled the check mark.
                     state.pin_base = pin.is_checked();
+                } else if let Some((theme, _)) =
+                    theme_items.iter().find(|(_, item)| *event.id() == item.id())
+                {
+                    state.theme = *theme;
+                    for (t, item) in &theme_items {
+                        item.set_checked(*t == state.theme);
+                    }
                 } else if *event.id() == rainbow.id() {
                     state.rainbow = rainbow.is_checked();
                 } else if *event.id() == heatmap.id() {

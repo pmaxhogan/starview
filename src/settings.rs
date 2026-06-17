@@ -153,6 +153,14 @@ pub fn load() -> Settings {
     // A hand-edited 0 would make the overlay invisible with no way back.
     s.opacity = s.opacity.clamp(20, 100);
     s.scale = s.scale.clamp(50, 200);
+    // The three board-coloring modes are mutually exclusive; if a legacy or
+    // hand-edited config set more than one, keep a single one by priority.
+    if s.error_heatmap {
+        s.heatmap = false;
+        s.rainbow = false;
+    } else if s.heatmap {
+        s.rainbow = false;
+    }
     s
 }
 

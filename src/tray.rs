@@ -216,12 +216,22 @@ fn run(
                     for (t, item) in &theme_items {
                         item.set_checked(*t == state.theme);
                     }
-                } else if *event.id() == rainbow.id() {
-                    state.rainbow = rainbow.is_checked();
-                } else if *event.id() == heatmap.id() {
-                    state.heatmap = heatmap.is_checked();
-                } else if *event.id() == error_heatmap.id() {
-                    state.error_heatmap = error_heatmap.is_checked();
+                } else if *event.id() == rainbow.id()
+                    || *event.id() == heatmap.id()
+                    || *event.id() == error_heatmap.id()
+                {
+                    // The three board-coloring modes are mutually exclusive:
+                    // turning one on clears the others; clicking the active one
+                    // again turns it off (back to the plain board). muda has
+                    // already toggled the clicked item, so its is_checked() is
+                    // the new state; the unclicked ones are forced off.
+                    state.rainbow = *event.id() == rainbow.id() && rainbow.is_checked();
+                    state.heatmap = *event.id() == heatmap.id() && heatmap.is_checked();
+                    state.error_heatmap =
+                        *event.id() == error_heatmap.id() && error_heatmap.is_checked();
+                    rainbow.set_checked(state.rainbow);
+                    heatmap.set_checked(state.heatmap);
+                    error_heatmap.set_checked(state.error_heatmap);
                 } else if *event.id() == reset_stats.id() {
                     on_event(TrayEvent::ResetStats);
                     continue;

@@ -121,6 +121,7 @@ fn main() -> eframe::Result {
                     let _ = tray_tx.send(match event {
                         tray::TrayEvent::Settings(s) => overlay::AppEvent::Settings(s),
                         tray::TrayEvent::ResetStats => overlay::AppEvent::ResetStats,
+                        tray::TrayEvent::ExportStats => overlay::AppEvent::ExportStats,
                         tray::TrayEvent::ToggleOverlay => overlay::AppEvent::ToggleOverlay,
                         tray::TrayEvent::Quit => overlay::AppEvent::Quit,
                     });

@@ -45,8 +45,9 @@ Order is easy/low-risk first, then the data-model and harder ones.
 - [x] **Time-windowed views** (v0.14.0) — "Heatmap range" submenu
   (All-time/Today/This week) windows the press heatmap + its counter, using new
   per-key-per-day buckets.
-- [ ] **Export / stats window** — an egui window (or file export) summarizing
-  the accumulated stats.
+- [x] **Export / stats window** (v0.15.0) — "Export stats…" tray item writes a
+  full text report (totals, top keys, finger load, hand balance, bigrams, typo
+  keys, 7-day history) and opens it.
 - [ ] **Substitution-pair typos** — when a backspaced char is replaced by a
   different one (same window, no mouse), record the (typed→meant) pair; show top
   confusions. Fuzzy by nature.

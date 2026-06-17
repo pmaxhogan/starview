@@ -26,6 +26,7 @@ use crate::updater;
 pub enum TrayEvent {
     Settings(Settings),
     ResetStats,
+    ExportStats,
     /// The global show/hide hotkey (Ctrl+Alt+O) was pressed.
     ToggleOverlay,
     Quit,
@@ -172,6 +173,7 @@ fn run(
     for (_, item) in &range_items {
         range_menu.append(item)?;
     }
+    let export_stats = MenuItem::new("Export stats\u{2026}", true, None);
     let reset_stats = MenuItem::new("Reset key stats", true, None);
     // Disabled label showing the running version. Enabled "Up to date" item
     // below doubles as a manual "check for updates" button.
@@ -196,6 +198,7 @@ fn run(
     menu.append(&bigrams)?;
     menu.append(&daily)?;
     menu.append(&PredefinedMenuItem::separator())?;
+    menu.append(&export_stats)?;
     menu.append(&reset_stats)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&version)?;
@@ -294,6 +297,9 @@ fn run(
                     for (w, item) in &range_items {
                         item.set_checked(*w == state.heatmap_range);
                     }
+                } else if *event.id() == export_stats.id() {
+                    on_event(TrayEvent::ExportStats);
+                    continue;
                 } else if *event.id() == reset_stats.id() {
                     on_event(TrayEvent::ResetStats);
                     continue;

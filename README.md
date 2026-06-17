@@ -66,6 +66,11 @@ again); hold **Shift** and click the **✕** next to it to quit.
 
 Press **Ctrl+Alt+O** anywhere to show/hide the overlay (a global hotkey).
 
+The tray also exposes typing analytics: a live **WPM** readout, a **finger
+load** chart, **top bigrams**, a **daily count & streak**, a time-windowed
+press **heatmap** (all-time / today / this week), accent **themes**, an
+**overlay size**, and an **Export stats…** item that writes a full report.
+
 On non-base layers, unmapped (transparent) keys show the base layer's label
 dimmed — matching QMK's fall-through semantics — while `KC_NO` keys stay blank.
 Physically held keys highlight, and the highlight fades out over ~3s after

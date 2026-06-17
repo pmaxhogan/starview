@@ -31,6 +31,8 @@ pub enum AppEvent {
     Settings(Settings),
     /// Clear all accumulated key stats (tray menu).
     ResetStats,
+    /// Write a stats report to a file and open it (tray menu).
+    ExportStats,
     /// Global hotkey toggled the overlay's visibility.
     ToggleOverlay,
     /// Quit chosen from the tray menu.
@@ -462,6 +464,32 @@ impl OverlayApp {
         (n as f32 * 12.0 / WPM_WINDOW).round() as u32
     }
 
+    /// Display label for a key from the base layer (for the stats report),
+    /// falling back to "#<index>" when the layout can't resolve it.
+    fn base_label(&self, i: usize) -> String {
+        self.layout
+            .as_ref()
+            .and_then(|l| l.layers.iter().find(|ly| ly.position == 0))
+            .and_then(|ly| ly.keys.get(i))
+            .map(key_text)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("#{i}"))
+    }
+
+    /// Write a full stats report to a text file and open it.
+    fn export_stats(&self) {
+        let Some(dir) = stats::dir() else { return };
+        let report = self.stats.report(&self.today, |i| self.base_label(i));
+        let path = dir.join("starview-stats.txt");
+        let _ = std::fs::create_dir_all(&dir);
+        if let Err(err) = std::fs::write(&path, report) {
+            eprintln!("failed to write stats report: {err}");
+            return;
+        }
+        // Open with the default handler (Notepad for .txt).
+        let _ = std::process::Command::new("explorer").arg(&path).spawn();
+    }
+
     /// A small fading "2 › 5 › 1" trail of recently-visited layers, centered at
     /// the top of the panel for a couple seconds after a switch.
     fn draw_breadcrumb(&self, ui: &egui::Ui, panel: Rect) {
@@ -596,6 +624,7 @@ impl eframe::App for OverlayApp {
                         self.positioned = false; // re-anchor on next tick
                     }
                 }
+                AppEvent::ExportStats => self.export_stats(),
                 AppEvent::ToggleOverlay => self.hidden = !self.hidden,
                 AppEvent::ResetStats => {
                     self.stats = Stats::default();

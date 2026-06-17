@@ -203,6 +203,23 @@ mod tests {
     }
 
     #[test]
+    fn report_summarizes() {
+        let mut s = Stats::default();
+        for _ in 0..100 {
+            s.record(0);
+        }
+        s.record_delete(0);
+        s.record_bigram("T", "H");
+        s.record_day("2026-06-16");
+        let r = s.report("2026-06-16", |i| format!("k{i}"));
+        assert!(r.contains("Total presses:"), "has totals");
+        assert!(r.contains("k0"), "labels the top key");
+        assert!(r.contains("TH"), "lists bigrams");
+        assert!(r.contains("Finger load"), "has finger section");
+        assert!(r.contains("Recent days"), "has daily section");
+    }
+
+    #[test]
     fn records_and_counts() {
         let mut s = Stats::default();
         for _ in 0..3 {
@@ -236,9 +253,107 @@ mod tests {
     }
 }
 
-fn path() -> Option<PathBuf> {
+impl Stats {
+    /// A plain-text summary of all accumulated stats. Pure (no I/O): `label`
+    /// resolves an Oryx key index to a display label, `today` is the local date.
+    pub fn report(&self, today: &str, label: impl Fn(usize) -> String) -> String {
+        use std::fmt::Write as _;
+        let mut s = String::new();
+        let total: u64 = self.presses.values().sum();
+        let corrections: u64 = self.deletes.values().sum();
+        let rate = if total > 0 { corrections as f64 / total as f64 * 100.0 } else { 0.0 };
+
+        let _ = writeln!(s, "starview key stats - {today}\n");
+        let _ = writeln!(s, "Lifetime");
+        let _ = writeln!(s, "  Total presses:    {}", commas(total));
+        let _ = writeln!(s, "  Corrections:      {} (tracked backspaces)", commas(corrections));
+        let _ = writeln!(s, "  Correction rate:  {rate:.1}%");
+        let _ = writeln!(s, "  Daily streak:     {} days\n", self.streak(today));
+
+        let mut keys: Vec<(usize, u64)> = self.presses.iter().map(|(k, c)| (*k, *c)).collect();
+        keys.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        let _ = writeln!(s, "Most-pressed keys");
+        for (rank, (k, c)) in keys.iter().take(15).enumerate() {
+            let _ = writeln!(s, "  {:>2}. {:<6} {}", rank + 1, label(*k), commas(*c));
+        }
+        let _ = writeln!(s);
+
+        let mut loads = [0u64; 10];
+        for i in 0..crate::geometry::MOONLANDER_KEYS.len() {
+            loads[crate::geometry::finger_slot(i)] += self.count(i);
+        }
+        let fsum: u64 = loads.iter().sum();
+        let pct = |v: u64| if fsum > 0 { v as f64 / fsum as f64 * 100.0 } else { 0.0 };
+        let names = [
+            "L pinky", "L ring", "L middle", "L index", "L thumb", "R thumb", "R index",
+            "R middle", "R ring", "R pinky",
+        ];
+        let _ = writeln!(s, "Finger load");
+        for (n, l) in names.iter().zip(loads) {
+            let _ = writeln!(s, "  {:<9} {:>12}  {:>5.1}%", n, commas(l), pct(l));
+        }
+        let left: u64 = loads[..5].iter().sum();
+        let _ = writeln!(
+            s,
+            "  Hand balance: left {:.0}%  right {:.0}%\n",
+            pct(left),
+            pct(fsum - left)
+        );
+
+        let _ = writeln!(s, "Top bigrams");
+        for (b, c) in self.top_bigrams(15) {
+            let _ = writeln!(s, "  {:<4} {}", b, commas(c));
+        }
+        let _ = writeln!(s);
+
+        let mut typos: Vec<(usize, f32)> = (0..crate::geometry::MOONLANDER_KEYS.len())
+            .filter_map(|i| self.error_rate(i).map(|r| (i, r)))
+            .filter(|t| t.1 > 0.0)
+            .collect();
+        typos.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let _ = writeln!(s, "Most-corrected keys (>= {MIN_ERROR_SAMPLES} presses)");
+        for (k, r) in typos.iter().take(10) {
+            let _ = writeln!(
+                s,
+                "  {:<6} {:>5.1}%  ({} of {})",
+                label(*k),
+                r * 100.0,
+                self.delete_count(*k),
+                self.count(*k)
+            );
+        }
+        let _ = writeln!(s);
+
+        let _ = writeln!(s, "Recent days");
+        for d in recent_days(today, 7) {
+            let _ = writeln!(s, "  {}  {}", d, commas(self.day_count(&d)));
+        }
+        s
+    }
+}
+
+/// Group an integer with thousands separators.
+fn commas(n: u64) -> String {
+    let s = n.to_string();
+    let b = s.as_bytes();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, &c) in b.iter().enumerate() {
+        if i > 0 && (b.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c as char);
+    }
+    out
+}
+
+/// The starview data directory (%LOCALAPPDATA%\starview).
+pub fn dir() -> Option<PathBuf> {
     let base = std::env::var_os("LOCALAPPDATA")?;
-    Some(PathBuf::from(base).join("starview").join("stats.json"))
+    Some(PathBuf::from(base).join("starview"))
+}
+
+fn path() -> Option<PathBuf> {
+    Some(dir()?.join("stats.json"))
 }
 
 pub fn load() -> Stats {

@@ -17,8 +17,8 @@ Order is easy/low-risk first, then the data-model and harder ones.
   `TrayEvent::ResetStats` → `AppEvent::ResetStats`; overlay sets
   `stats = Stats::default()` and saves. (`Stats::default()` clears every field,
   so this keeps working as new stat kinds are added.)
-- [ ] **Adjustable size/scale** — tray submenu (e.g. 75/100/125/150%) scaling
-  `BOARD_SCALE` and the window size; persisted in settings.
+- [x] **Adjustable size/scale** (v0.5.0) — tray submenu (75/100/125/150/200%)
+  sets the UI zoom factor and resizes the window to match; persisted.
 - [ ] **Color theme options** — tray submenu of a few accent/panel presets;
   palette() reads the chosen theme; persisted.
 - [ ] **Recent-layer breadcrumb** — momentary toast / small trail of the last

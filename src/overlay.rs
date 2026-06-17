@@ -163,6 +163,10 @@ pub struct OverlayApp {
     heatmap: bool,
     /// Tint each key by its typo rate + list worst offenders (tray toggle).
     error_heatmap: bool,
+    /// Overlay size percent (UI zoom factor); 100 = default.
+    scale: u8,
+    /// Last scale pushed to the viewport, so a change re-zooms + resizes once.
+    applied_scale: Option<u8>,
     /// Recent character-producing presses (Oryx key index + foreground window
     /// at press time), newest last. A backspace pops this to attribute the
     /// deletion; the per-entry window guards against counting edits made after
@@ -221,6 +225,8 @@ impl OverlayApp {
             stats,
             heatmap: settings.heatmap,
             error_heatmap: settings.error_heatmap,
+            scale: settings.scale,
+            applied_scale: None,
             typed: Vec::new(),
             last_cursor: None,
             stats_dirty: false,
@@ -379,6 +385,7 @@ impl eframe::App for OverlayApp {
                     self.rainbow = s.rainbow;
                     self.heatmap = s.heatmap;
                     self.error_heatmap = s.error_heatmap;
+                    self.scale = s.scale;
                     // Re-show at full opacity and restart the timer on change.
                     self.last_activity = std::time::Instant::now();
                     let pos = s.position.map(|(x, y)| pos2(x, y));
@@ -466,6 +473,19 @@ impl eframe::App for OverlayApp {
                 // Make sure the flush actually fires even if typing stops.
                 ctx.request_repaint_after(STATS_SAVE_AFTER - since);
             }
+        }
+
+        // Apply the overlay-size zoom and resize the window to match, once per
+        // change. The zoom factor scales all UI content; the window grows by
+        // the same factor so the panel still fits, then re-anchors.
+        if self.applied_scale != Some(self.scale) {
+            let z = self.scale as f32 / 100.0;
+            ctx.set_zoom_factor(z);
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
+                vec2(OVERLAY_W, OVERLAY_H) * z,
+            ));
+            self.applied_scale = Some(self.scale);
+            self.positioned = false; // re-anchor at the new size
         }
 
         // Pin to the shift-dragged spot if there is one, else to the

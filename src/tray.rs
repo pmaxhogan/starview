@@ -15,7 +15,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, TranslateMessage, WM_APP,
 };
 
-use crate::settings::{self, Corner, FADE_STEPS, OPACITY_STEPS, Settings};
+use crate::settings::{self, Corner, FADE_STEPS, OPACITY_STEPS, SIZE_STEPS, Settings};
 use crate::updater;
 
 pub enum TrayEvent {
@@ -95,6 +95,14 @@ fn run(
     for (_, item) in &opacity_items {
         opacity_menu.append(item)?;
     }
+    let size_items: Vec<(u8, CheckMenuItem)> = SIZE_STEPS
+        .into_iter()
+        .map(|s| (s, CheckMenuItem::new(format!("{s}%"), true, s == initial.scale, None)))
+        .collect();
+    let size_menu = Submenu::new("Overlay size", true);
+    for (_, item) in &size_items {
+        size_menu.append(item)?;
+    }
     let fade_items: Vec<(u16, CheckMenuItem)> = FADE_STEPS
         .into_iter()
         .map(|(label, secs)| {
@@ -119,6 +127,7 @@ fn run(
     menu.append(&pin)?;
     menu.append(&corner_menu)?;
     menu.append(&opacity_menu)?;
+    menu.append(&size_menu)?;
     menu.append(&fade_menu)?;
     menu.append(&rainbow)?;
     menu.append(&heatmap)?;
@@ -212,6 +221,13 @@ fn run(
                     state.opacity = *opacity;
                     for (o, item) in &opacity_items {
                         item.set_checked(*o == state.opacity);
+                    }
+                } else if let Some((scale, _)) =
+                    size_items.iter().find(|(_, item)| *event.id() == item.id())
+                {
+                    state.scale = *scale;
+                    for (s, item) in &size_items {
+                        item.set_checked(*s == state.scale);
                     }
                 } else if let Some((secs, _)) =
                     fade_items.iter().find(|(_, item)| *event.id() == item.id())

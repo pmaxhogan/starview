@@ -53,6 +53,8 @@ pub struct Settings {
     /// Tint each key by its typo rate (presses immediately backspaced away),
     /// and list the worst offenders in the header.
     pub error_heatmap: bool,
+    /// Overlay size, percent (scales the whole panel via the UI zoom factor).
+    pub scale: u8,
 }
 
 impl Default for Settings {
@@ -66,12 +68,16 @@ impl Default for Settings {
             rainbow: false,
             heatmap: false,
             error_heatmap: false,
+            scale: 100,
         }
     }
 }
 
 /// Opacity choices offered in the tray menu.
 pub const OPACITY_STEPS: [u8; 5] = [100, 85, 70, 55, 40];
+
+/// Overlay-size choices offered in the tray menu (percent).
+pub const SIZE_STEPS: [u8; 5] = [75, 100, 125, 150, 200];
 
 /// Auto-fade choices offered in the tray menu: (label, seconds); 0 = never.
 pub const FADE_STEPS: [(&str, u16); 7] = [
@@ -96,6 +102,7 @@ pub fn load() -> Settings {
         .unwrap_or_default();
     // A hand-edited 0 would make the overlay invisible with no way back.
     s.opacity = s.opacity.clamp(20, 100);
+    s.scale = s.scale.clamp(50, 200);
     s
 }
 

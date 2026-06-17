@@ -151,6 +151,11 @@ fn run(
     let rainbow = CheckMenuItem::new("Rainbow key ghosts", true, initial.rainbow, None);
     let heatmap = CheckMenuItem::new("Key heatmap", true, initial.heatmap, None);
     let error_heatmap = CheckMenuItem::new("Typo heatmap", true, initial.error_heatmap, None);
+    // Mutually-exclusive board-coloring modes, grouped in their own submenu.
+    let coloring_menu = Submenu::new("Key coloring", true);
+    coloring_menu.append(&rainbow)?;
+    coloring_menu.append(&heatmap)?;
+    coloring_menu.append(&error_heatmap)?;
     let reset_stats = MenuItem::new("Reset key stats", true, None);
     // Disabled label showing the running version. Enabled "Up to date" item
     // below doubles as a manual "check for updates" button.
@@ -168,9 +173,8 @@ fn run(
     menu.append(&size_menu)?;
     menu.append(&fade_menu)?;
     menu.append(&theme_menu)?;
-    menu.append(&rainbow)?;
-    menu.append(&heatmap)?;
-    menu.append(&error_heatmap)?;
+    menu.append(&coloring_menu)?;
+    menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&reset_stats)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&version)?;

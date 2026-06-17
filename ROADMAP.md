@@ -1,0 +1,54 @@
+# starview roadmap
+
+Selected features to build, one at a time. Each: implement → build + test →
+commit → bump version (minor for a feature, patch for a small tweak) → tag →
+push (no CI wait) → next.
+
+Verification note: starview reads the keyboard's **raw HID matrix** (Oryx
+protocol), not OS keystrokes, so injected input can't exercise typing logic —
+keypress-driven features are covered by unit tests on pure logic + a launch
+smoke test, plus a seeded-data screenshot for anything visual.
+
+Order is easy/low-risk first, then the data-model and harder ones.
+
+## Overlay / UX
+
+- [ ] **Reset stats** — tray item that clears all accumulated counts. Tray →
+  `TrayEvent::ResetStats` → `AppEvent::ResetStats`; overlay sets
+  `stats = Stats::default()` and saves. (`Stats::default()` clears every field,
+  so this keeps working as new stat kinds are added.)
+- [ ] **Adjustable size/scale** — tray submenu (e.g. 75/100/125/150%) scaling
+  `BOARD_SCALE` and the window size; persisted in settings.
+- [ ] **Color theme options** — tray submenu of a few accent/panel presets;
+  palette() reads the chosen theme; persisted.
+- [ ] **Recent-layer breadcrumb** — momentary toast / small trail of the last
+  few layers on switch, fading out.
+- [ ] **Global hotkey toggle** — `RegisterHotKey` to show/hide (pin) the overlay
+  on a configurable shortcut.
+- [ ] **Multi-monitor placement** — choose which monitor the overlay docks to;
+  persisted alongside corner.
+
+## Typing analytics (keypress-driven; pure logic unit-tested)
+
+- [ ] **Live WPM readout** — rolling words-per-minute from the keypress stream
+  (chars/5 over a sliding window), shown in the header.
+- [ ] **Per-hand / per-finger load** — finger assignment per key (geometry-based
+  table); show hand/finger balance.
+- [ ] **Bigram frequency** — count consecutive key pairs; expose top digraphs.
+- [ ] **Daily counts & streaks** — per-day press totals + streak, keyed by local
+  date (Win32 local time); persisted in stats.
+- [ ] **Time-windowed views** — today / this week / all-time toggle for the
+  heatmap + counters, from per-day buckets.
+- [ ] **Export / stats window** — an egui window (or file export) summarizing
+  the accumulated stats.
+- [ ] **Substitution-pair typos** — when a backspaced char is replaced by a
+  different one (same window, no mouse), record the (typed→meant) pair; show top
+  confusions. Fuzzy by nature.
+
+## Hardware / layout
+
+- [ ] **Auto-detect layout** — discover the connected board's layout instead of
+  the hardcoded hash. Best-feasible: persist the chosen layout id in settings
+  and remember it across runs; investigate reading it from the device.
+
+_Not selected: support for other ZSA boards (Voyager/Ergodox)._

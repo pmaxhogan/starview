@@ -29,6 +29,12 @@ Order is easy/low-risk first, then the data-model and harder ones.
 - [x] **Multi-monitor placement** (v0.9.0) — "Overlay monitor" tray submenu
   (shown when >1 display) docks to a chosen monitor's corner using its desktop
   offset; persisted. Also fixed right/bottom corners at non-100% zoom.
+- [x] **Fullscreen display mode** (v0.18.0) — "Fullscreen display" tray toggle
+  covers the chosen monitor entirely: a centered board, zoom-enlarged to fill
+  ~90% of the display, on a solid full-window background. Always opaque, never
+  auto-hides, and always shown (even on the base layer / when disconnected), so
+  a dedicated screen (e.g. a phone used as a USB/streamed second monitor) shows
+  only starview. Persisted; pairs with "Overlay monitor".
 
 ## Typing analytics (keypress-driven; pure logic unit-tested)
 

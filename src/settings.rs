@@ -128,6 +128,11 @@ pub struct Settings {
     pub theme: Theme,
     /// Which monitor to dock to (index into the primary-first monitor list).
     pub monitor: usize,
+    /// Fullscreen "display" mode: cover the chosen monitor entirely with a
+    /// centered, enlarged board on a solid background, instead of a small
+    /// corner overlay. For driving a dedicated screen (e.g. a phone used as a
+    /// USB/streamed second monitor) so starview is the only thing shown.
+    pub fullscreen: bool,
     /// Show a live words-per-minute readout in the header.
     pub show_wpm: bool,
     /// Show the per-finger load chart in the center gap.
@@ -161,6 +166,7 @@ impl Default for Settings {
             scale: 100,
             theme: Theme::Blue,
             monitor: 0,
+            fullscreen: false,
             show_wpm: false,
             show_fingers: false,
             show_bigrams: false,

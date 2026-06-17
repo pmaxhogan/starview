@@ -26,8 +26,9 @@ Order is easy/low-risk first, then the data-model and harder ones.
   last few layers, centered at the panel top for ~2s after a switch.
 - [x] **Global hotkey toggle** (v0.8.0) — Ctrl+Alt+O (`RegisterHotKey` on the
   tray thread) toggles a master visibility off-switch.
-- [ ] **Multi-monitor placement** — choose which monitor the overlay docks to;
-  persisted alongside corner.
+- [x] **Multi-monitor placement** (v0.9.0) — "Overlay monitor" tray submenu
+  (shown when >1 display) docks to a chosen monitor's corner using its desktop
+  offset; persisted. Also fixed right/bottom corners at non-100% zoom.
 
 ## Typing analytics (keypress-driven; pure logic unit-tested)
 

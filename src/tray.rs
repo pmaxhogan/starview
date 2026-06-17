@@ -95,6 +95,25 @@ fn run(
     for (_, item) in &corner_items {
         corner_menu.append(item)?;
     }
+    // Monitor picker — only meaningful with more than one display.
+    let monitors = crate::display::monitors();
+    let monitor_items: Vec<(usize, CheckMenuItem)> = monitors
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let label = if m.primary {
+                format!("Monitor {} (primary)", i + 1)
+            } else {
+                format!("Monitor {}", i + 1)
+            };
+            (i, CheckMenuItem::new(label, true, i == initial.monitor, None))
+        })
+        .collect();
+    let monitor_menu = Submenu::new("Overlay monitor", true);
+    for (_, item) in &monitor_items {
+        monitor_menu.append(item)?;
+    }
+
     let opacity_items: Vec<(u8, CheckMenuItem)> = OPACITY_STEPS
         .into_iter()
         .map(|o| (o, CheckMenuItem::new(format!("{o}%"), true, o == initial.opacity, None)))
@@ -142,6 +161,9 @@ fn run(
     let menu = Menu::new();
     menu.append(&pin)?;
     menu.append(&corner_menu)?;
+    if monitor_items.len() > 1 {
+        menu.append(&monitor_menu)?;
+    }
     menu.append(&opacity_menu)?;
     menu.append(&size_menu)?;
     menu.append(&fade_menu)?;
@@ -262,6 +284,16 @@ fn run(
                     state.position = None;
                     for (c, item) in &corner_items {
                         item.set_checked(*c == state.corner);
+                    }
+                } else if let Some((idx, _)) =
+                    monitor_items.iter().find(|(_, item)| *event.id() == item.id())
+                {
+                    state.monitor = *idx;
+                    // Re-dock to the chosen monitor's corner, dropping any
+                    // dragged spot.
+                    state.position = None;
+                    for (i, item) in &monitor_items {
+                        item.set_checked(*i == state.monitor);
                     }
                 } else if let Some((opacity, _)) =
                     opacity_items.iter().find(|(_, item)| *event.id() == item.id())

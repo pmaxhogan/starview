@@ -104,6 +104,8 @@ pub struct Settings {
     pub scale: u8,
     /// Accent color theme.
     pub theme: Theme,
+    /// Which monitor to dock to (index into the primary-first monitor list).
+    pub monitor: usize,
 }
 
 impl Default for Settings {
@@ -119,6 +121,7 @@ impl Default for Settings {
             error_heatmap: false,
             scale: 100,
             theme: Theme::Blue,
+            monitor: 0,
         }
     }
 }

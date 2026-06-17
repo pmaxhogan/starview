@@ -149,6 +149,8 @@ pub struct OverlayApp {
     /// Keep the overlay up on the base layer too (tray toggle / --always).
     always: bool,
     corner: Corner,
+    /// Which monitor to dock to (index into the primary-first monitor list).
+    monitor: usize,
     /// Shift-dragged position (logical points); overrides corner docking.
     custom_pos: Option<egui::Pos2>,
     /// Hamburger drag-handle rect from the last drawn frame, window-local
@@ -233,6 +235,7 @@ impl OverlayApp {
             shown: false,
             always: settings.pin_base,
             corner: settings.corner,
+            monitor: settings.monitor,
             custom_pos: settings.position.map(|(x, y)| pos2(x, y)),
             burger: None,
             close_btn: None,
@@ -469,8 +472,10 @@ impl eframe::App for OverlayApp {
                     // Re-show at full opacity and restart the timer on change.
                     self.last_activity = std::time::Instant::now();
                     let pos = s.position.map(|(x, y)| pos2(x, y));
-                    if self.corner != s.corner || self.custom_pos != pos {
+                    if self.corner != s.corner || self.custom_pos != pos || self.monitor != s.monitor
+                    {
                         self.corner = s.corner;
+                        self.monitor = s.monitor;
                         self.custom_pos = pos;
                         self.positioned = false; // re-anchor on next tick
                     }
@@ -578,18 +583,47 @@ impl eframe::App for OverlayApp {
             self.positioned = false; // re-anchor at the new size
         }
 
-        // Pin to the shift-dragged spot if there is one, else to the
-        // configured corner once the monitor size is known.
+        // Pin to the shift-dragged spot if there is one, else to the chosen
+        // monitor's corner. Uses the actual window size (so right/bottom corners
+        // are correct at any zoom) and the monitor's desktop offset (so it can
+        // dock to a secondary display), both in logical points.
         if !self.positioned {
             if let Some(pos) = self.custom_pos {
                 ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
                 self.positioned = true;
-            } else if let Some(size) = ctx.input(|i| i.viewport().monitor_size) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(corner_pos(
-                    self.corner,
-                    size,
-                )));
-                self.positioned = true;
+            } else {
+                let win = ctx.input(|i| i.viewport().inner_rect.map(|r| r.size()));
+                #[cfg(windows)]
+                let mon = {
+                    let ppp = ctx.pixels_per_point();
+                    let mons = crate::display::monitors();
+                    mons.get(self.monitor)
+                        .or_else(|| mons.first())
+                        .map(|m| {
+                            (m.left as f32 / ppp, m.top as f32 / ppp, m.right as f32 / ppp, m.bottom as f32 / ppp)
+                        })
+                };
+                #[cfg(not(windows))]
+                let mon: Option<(f32, f32, f32, f32)> = None;
+
+                if let (Some(rect), Some(size)) = (mon, win) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(corner_pos_in_rect(
+                        self.corner,
+                        rect,
+                        size,
+                    )));
+                    self.positioned = true;
+                } else if mon.is_none()
+                    && let Some(size) = ctx.input(|i| i.viewport().monitor_size)
+                {
+                    // Non-Windows fallback: dock within the current monitor.
+                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(corner_pos(
+                        self.corner,
+                        size,
+                    )));
+                    self.positioned = true;
+                }
+                // (Windows, monitor known but window size not yet: retry next tick.)
             }
         }
 
@@ -990,6 +1024,22 @@ fn corner_pos(corner: Corner, monitor: egui::Vec2) -> egui::Pos2 {
         Corner::TopLeft => pos2(m, m),
         Corner::TopRight => pos2(right, m),
         Corner::BottomLeft => pos2(m, bottom),
+        Corner::BottomRight => pos2(right, bottom),
+    }
+}
+
+/// Dock position for a corner within a specific monitor rect (left, top, right,
+/// bottom, logical points), given the actual window size. Honors the monitor's
+/// desktop offset so it works on any display.
+fn corner_pos_in_rect(corner: Corner, (l, t, r, b): (f32, f32, f32, f32), win: egui::Vec2) -> egui::Pos2 {
+    let m = SCREEN_MARGIN;
+    let right = r - win.x - m;
+    // Extra clearance for the taskbar on bottom corners.
+    let bottom = b - win.y - 52.0;
+    match corner {
+        Corner::TopLeft => pos2(l + m, t + m),
+        Corner::TopRight => pos2(right, t + m),
+        Corner::BottomLeft => pos2(l + m, bottom),
         Corner::BottomRight => pos2(right, bottom),
     }
 }

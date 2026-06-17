@@ -37,7 +37,8 @@ Order is easy/low-risk first, then the data-model and harder ones.
 - [x] **Per-hand / per-finger load** (v0.11.0) — geometry-based finger slots; a
   10-bar load chart (left accent / right grey, P R M I T labels) in the center
   gap; tray toggle.
-- [ ] **Bigram frequency** — count consecutive key pairs; expose top digraphs.
+- [x] **Bigram frequency** (v0.12.0) — counts consecutive character pairs
+  (persisted); "Show top bigrams" toggle lists the top 5 in the header.
 - [ ] **Daily counts & streaks** — per-day press totals + streak, keyed by local
   date (Win32 local time); persisted in stats.
 - [ ] **Time-windowed views** — today / this week / all-time toggle for the

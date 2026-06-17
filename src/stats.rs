@@ -24,6 +24,10 @@ pub struct Stats {
     /// (the typo proxy — see the overlay's backspace tracker). Counted only
     /// when no window switch happened between the keypress and the backspace.
     pub deletes: HashMap<usize, u64>,
+    /// Counts of consecutive character pairs ("th", "he", …), keyed by the two
+    /// characters concatenated.
+    #[serde(default)]
+    pub bigrams: HashMap<String, u64>,
 }
 
 impl Stats {
@@ -55,6 +59,20 @@ impl Stats {
     /// Deletions recorded for one key.
     pub fn delete_count(&self, key: usize) -> u64 {
         self.deletes.get(&key).copied().unwrap_or(0)
+    }
+
+    /// One more occurrence of the character pair `a` then `b`.
+    pub fn record_bigram(&mut self, a: &str, b: &str) {
+        *self.bigrams.entry(format!("{a}{b}")).or_insert(0) += 1;
+    }
+
+    /// The `n` most frequent bigrams, highest first (ties broken alphabetically).
+    pub fn top_bigrams(&self, n: usize) -> Vec<(String, u64)> {
+        let mut v: Vec<(String, u64)> =
+            self.bigrams.iter().map(|(k, c)| (k.clone(), *c)).collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        v.truncate(n);
+        v
     }
 
     /// Fraction of this key's presses that were immediately deleted, or None

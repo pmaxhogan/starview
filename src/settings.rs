@@ -110,6 +110,8 @@ pub struct Settings {
     pub show_wpm: bool,
     /// Show the per-finger load chart in the center gap.
     pub show_fingers: bool,
+    /// Show the most frequent bigrams in the header.
+    pub show_bigrams: bool,
 }
 
 impl Default for Settings {
@@ -128,6 +130,7 @@ impl Default for Settings {
             monitor: 0,
             show_wpm: false,
             show_fingers: false,
+            show_bigrams: false,
         }
     }
 }

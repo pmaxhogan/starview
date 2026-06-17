@@ -198,6 +198,11 @@ pub struct OverlayApp {
     show_wpm: bool,
     /// Show the per-finger load chart (tray toggle).
     show_fingers: bool,
+    /// Show top bigrams in the header (tray toggle).
+    show_bigrams: bool,
+    /// Previous character typed, for counting consecutive bigrams. Cleared by
+    /// anything that breaks the typing run (backspace, nav, mouse, …).
+    last_char: Option<String>,
     /// Timestamps of recent character keypresses, for the rolling WPM window.
     wpm_times: Vec<std::time::Instant>,
     /// Overlay size percent (UI zoom factor); 100 = default.
@@ -268,6 +273,8 @@ impl OverlayApp {
             error_heatmap: settings.error_heatmap,
             show_wpm: settings.show_wpm,
             show_fingers: settings.show_fingers,
+            show_bigrams: settings.show_bigrams,
+            last_char: None,
             wpm_times: Vec::new(),
             scale: settings.scale,
             applied_scale: None,
@@ -319,10 +326,11 @@ impl OverlayApp {
         let (cursor, button) = pointer_state();
         if pointer_invalidates(self.last_cursor, cursor, button) {
             self.typed.clear();
+            self.last_char = None;
         }
         self.last_cursor = cursor;
-        let kind = self
-            .effective_code(i)
+        let code = self.effective_code(i);
+        let kind = code
             .as_deref()
             .map(keycodes::classify)
             .unwrap_or(keycodes::KeyKind::Other);
@@ -331,7 +339,10 @@ impl OverlayApp {
         match kind {
             // A modified character key (Ctrl+C, Ctrl+V, …) isn't typed text and
             // may have changed the buffer behind our back, so reset.
-            keycodes::KeyKind::Text if shortcut => self.typed.clear(),
+            keycodes::KeyKind::Text if shortcut => {
+                self.typed.clear();
+                self.last_char = None;
+            }
             keycodes::KeyKind::Text => {
                 self.typed.push((i, fg));
                 let overflow = self.typed.len().saturating_sub(TYPED_CAP);
@@ -340,10 +351,28 @@ impl OverlayApp {
                 }
                 // A character was typed — feed the rolling WPM window.
                 self.wpm_times.push(std::time::Instant::now());
+                // Count the bigram with the previous character.
+                let ch = code
+                    .as_deref()
+                    .and_then(keycodes::key_label)
+                    .map(str::to_owned)
+                    .filter(|s| !s.is_empty());
+                if let Some(ch) = ch {
+                    if let Some(prev) = self.last_char.take() {
+                        self.stats.record_bigram(&prev, &ch);
+                        self.stats_dirty = true;
+                    }
+                    self.last_char = Some(ch);
+                } else {
+                    self.last_char = None;
+                }
             }
             // Ctrl/Alt+Backspace deletes a whole word, not a single mistyped
             // char — don't pin that on the last key; just invalidate the buffer.
-            keycodes::KeyKind::Backspace if shortcut => self.typed.clear(),
+            keycodes::KeyKind::Backspace if shortcut => {
+                self.typed.clear();
+                self.last_char = None;
+            }
             keycodes::KeyKind::Backspace => {
                 if let Some((prev_i, prev_fg)) = self.typed.pop()
                     && prev_fg == fg
@@ -351,8 +380,12 @@ impl OverlayApp {
                     self.stats.record_delete(prev_i);
                     self.stats_dirty = true;
                 }
+                self.last_char = None; // a deletion breaks the bigram run
             }
-            keycodes::KeyKind::Break => self.typed.clear(),
+            keycodes::KeyKind::Break => {
+                self.typed.clear();
+                self.last_char = None;
+            }
             keycodes::KeyKind::Other => {}
         }
     }
@@ -482,6 +515,7 @@ impl eframe::App for OverlayApp {
                     self.released.clear();
                     self.key_hue.clear();
                     self.typed.clear();
+                    self.last_char = None;
                 }
                 AppEvent::Layout(info) => self.layout = Some(info),
                 AppEvent::Settings(s) => {
@@ -495,6 +529,7 @@ impl eframe::App for OverlayApp {
                     self.scale = s.scale;
                     self.show_wpm = s.show_wpm;
                     self.show_fingers = s.show_fingers;
+                    self.show_bigrams = s.show_bigrams;
                     set_theme(s.theme);
                     // Re-show at full opacity and restart the timer on change.
                     self.last_activity = std::time::Instant::now();
@@ -511,6 +546,7 @@ impl eframe::App for OverlayApp {
                 AppEvent::ResetStats => {
                     self.stats = Stats::default();
                     self.typed.clear();
+                    self.last_char = None;
                     stats::save(&self.stats);
                     self.stats_dirty = false;
                 }
@@ -520,6 +556,7 @@ impl eframe::App for OverlayApp {
                     // Pointing the trackball moves the caret target — abandon
                     // the typo buffer so a later backspace isn't misattributed.
                     self.typed.clear();
+                    self.last_char = None;
                     // Ease toward this motion window's direction instead of
                     // adding raw deltas — individual ~25ms windows are noisy
                     // and made the dot jitter during momentum spins.
@@ -843,6 +880,7 @@ impl eframe::App for OverlayApp {
         let heatmap = self.heatmap.then_some(&self.stats);
         let wpm = self.show_wpm.then(|| self.current_wpm());
         let finger_load = self.show_fingers.then_some(&self.stats);
+        let bigrams = self.show_bigrams.then_some(&self.stats);
         let panel = if !keys.is_empty() && keys.len() == geometry::MOONLANDER_KEYS.len() {
             draw_board(
                 ui,
@@ -858,6 +896,7 @@ impl eframe::App for OverlayApp {
                 error,
                 wpm,
                 finger_load,
+                bigrams,
                 align,
             )
         } else {
@@ -1110,6 +1149,7 @@ fn draw_board(
     error: Option<&Stats>,
     wpm: Option<u32>,
     finger_load: Option<&Stats>,
+    bigrams: Option<&Stats>,
     align: Align2,
 ) -> Rect {
     let now = std::time::Instant::now();
@@ -1154,7 +1194,15 @@ fn draw_board(
     // (close + hamburger) in the top-right corner. The typo heatmap shows the
     // worst offenders; otherwise the press heatmap shows a running total.
     let readout_at = pos2(rect.max.x - 56.0, rect.min.y + pad - 1.0);
-    if let Some(stats) = error {
+    if let Some(stats) = bigrams {
+        let top = stats.top_bigrams(5);
+        let text = if top.is_empty() {
+            "no bigrams yet".to_owned()
+        } else {
+            top.iter().map(|(b, _)| b.clone()).collect::<Vec<_>>().join("   ")
+        };
+        painter.text(readout_at, Align2::RIGHT_TOP, text, FontId::proportional(11.0), p.text_inherited);
+    } else if let Some(stats) = error {
         // Resolve a key's character label, following transparency to base.
         let label_for = |i: usize| -> String {
             let l = keys.get(i).map(key_text).unwrap_or_default();

@@ -16,7 +16,7 @@ use egui::{Align2, Color32, CornerRadius, FontId, Rect, pos2, vec2};
 
 use crate::hid::HidEvent;
 use crate::oryx::{self, LayoutInfo};
-use crate::settings::{self, Corner, Settings};
+use crate::settings::{self, Corner, Settings, TimeWindow};
 use crate::stats::{self, Stats};
 use crate::{geometry, keycodes};
 
@@ -126,6 +126,13 @@ fn palette() -> Palette {
     }
 }
 
+/// Per-key press counts for the press heatmap over the selected time window.
+struct Heat {
+    counts: [u64; 72],
+    max: u64,
+    total: u64,
+}
+
 pub struct OverlayApp {
     events: Receiver<AppEvent>,
     layout: Option<LayoutInfo>,
@@ -202,6 +209,8 @@ pub struct OverlayApp {
     show_bigrams: bool,
     /// Show today's count + streak in the header (tray toggle).
     show_daily: bool,
+    /// Time range for the press heatmap + its counter.
+    heatmap_range: TimeWindow,
     /// Today's local date ("YYYY-MM-DD"), refreshed each tick for daily buckets.
     today: String,
     /// Previous character typed, for counting consecutive bigrams. Cleared by
@@ -279,6 +288,7 @@ impl OverlayApp {
             show_fingers: settings.show_fingers,
             show_bigrams: settings.show_bigrams,
             show_daily: settings.show_daily,
+            heatmap_range: settings.heatmap_range,
             today: crate::display::today(),
             last_char: None,
             wpm_times: Vec::new(),
@@ -408,6 +418,38 @@ impl OverlayApp {
         }
     }
 
+    /// Per-key press counts for the heatmap over the selected time window.
+    /// All-time uses the complete lifetime history; Today/Week aggregate the
+    /// per-day buckets.
+    fn heat_data(&self) -> Heat {
+        let mut counts = [0u64; 72];
+        match self.heatmap_range {
+            TimeWindow::AllTime => {
+                for (i, c) in counts.iter_mut().enumerate() {
+                    *c = self.stats.count(i);
+                }
+            }
+            TimeWindow::Today => {
+                for (k, c) in self.stats.key_counts_over(&[self.today.clone()]) {
+                    if k < 72 {
+                        counts[k] += c;
+                    }
+                }
+            }
+            TimeWindow::Week => {
+                let days = stats::recent_days(&self.today, 7);
+                for (k, c) in self.stats.key_counts_over(&days) {
+                    if k < 72 {
+                        counts[k] += c;
+                    }
+                }
+            }
+        }
+        let max = counts.iter().copied().max().unwrap_or(0);
+        let total = counts.iter().sum();
+        Heat { counts, max, total }
+    }
+
     /// Live words-per-minute over the rolling window: characters/5 per minute,
     /// using the standard 5-chars-per-word convention. Decays to 0 when idle.
     fn current_wpm(&self) -> u32 {
@@ -503,6 +545,7 @@ impl eframe::App for OverlayApp {
                         // Tally the lifetime press count (heatmap + counter).
                         self.stats.record(i);
                         self.stats.record_day(&self.today);
+                        self.stats.record_key_day(&self.today, i);
                         self.stats_dirty = true;
                         self.track_typo(i);
                         // Capture the current rainbow hue so this key (and its
@@ -540,6 +583,7 @@ impl eframe::App for OverlayApp {
                     self.show_fingers = s.show_fingers;
                     self.show_bigrams = s.show_bigrams;
                     self.show_daily = s.show_daily;
+                    self.heatmap_range = s.heatmap_range;
                     set_theme(s.theme);
                     // Re-show at full opacity and restart the timer on change.
                     self.last_activity = std::time::Instant::now();
@@ -887,7 +931,7 @@ impl eframe::App for OverlayApp {
         // When a stats heatmap is on, pass the counts. The typo heatmap takes
         // precedence over the press heatmap for the board coloring + header.
         let error = self.error_heatmap.then_some(&self.stats);
-        let heatmap = self.heatmap.then_some(&self.stats);
+        let heatmap = self.heatmap.then(|| self.heat_data());
         let wpm = self.show_wpm.then(|| self.current_wpm());
         let finger_load = self.show_fingers.then_some(&self.stats);
         let bigrams = self.show_bigrams.then_some(&self.stats);
@@ -909,7 +953,7 @@ impl eframe::App for OverlayApp {
                 ball,
                 &self.ball_trail,
                 key_hue,
-                heatmap,
+                heatmap.as_ref(),
                 error,
                 wpm,
                 finger_load,
@@ -1163,7 +1207,7 @@ fn draw_board(
     ball: Option<egui::Vec2>,
     trail: &[egui::Vec2],
     key_hue: Option<&HashMap<usize, f32>>,
-    heatmap: Option<&Stats>,
+    heatmap: Option<&Heat>,
     error: Option<&Stats>,
     wpm: Option<u32>,
     finger_load: Option<&Stats>,
@@ -1173,7 +1217,7 @@ fn draw_board(
 ) -> Rect {
     let now = std::time::Instant::now();
     // Hottest key, for normalizing the press heatmap's color scale.
-    let heat_max = heatmap.map(Stats::max).unwrap_or(0);
+    let heat_max = heatmap.map(|h| h.max).unwrap_or(0);
     // Worst typo rate, for normalizing the error heatmap's scale.
     let error_max = error
         .map(|s| {
@@ -1254,11 +1298,11 @@ fn draw_board(
             format!("\u{232B} {}", parts.join("  "))
         };
         painter.text(readout_at, Align2::RIGHT_TOP, text, FontId::proportional(11.0), p.text_inherited);
-    } else if let Some(stats) = heatmap {
+    } else if let Some(h) = heatmap {
         painter.text(
             readout_at,
             Align2::RIGHT_TOP,
-            format!("{} presses", group_thousands(stats.total())),
+            format!("{} presses", group_thousands(h.total)),
             FontId::proportional(11.0),
             p.text_inherited,
         );
@@ -1316,8 +1360,8 @@ fn draw_board(
         }
         let base_fill = if let Some(stats) = error {
             error_fill(stats.error_rate(i), error_max, &p)
-        } else if let Some(stats) = heatmap {
-            heat_fill(stats.count(i), heat_max, &p)
+        } else if let Some(h) = heatmap {
+            heat_fill(h.counts.get(i).copied().unwrap_or(0), heat_max, &p)
         } else if label.is_empty() || inherited {
             p.key_blank
         } else {

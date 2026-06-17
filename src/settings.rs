@@ -52,6 +52,28 @@ impl Theme {
     }
 }
 
+/// Time range for the press heatmap and its counter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TimeWindow {
+    #[default]
+    AllTime,
+    Today,
+    Week,
+}
+
+impl TimeWindow {
+    pub const ALL: [TimeWindow; 3] = [TimeWindow::AllTime, TimeWindow::Today, TimeWindow::Week];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TimeWindow::AllTime => "All-time",
+            TimeWindow::Today => "Today",
+            TimeWindow::Week => "This week",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Corner {
@@ -114,6 +136,8 @@ pub struct Settings {
     pub show_bigrams: bool,
     /// Show today's press count and the daily streak in the header.
     pub show_daily: bool,
+    /// Time range for the press heatmap + its total counter.
+    pub heatmap_range: TimeWindow,
 }
 
 impl Default for Settings {
@@ -134,6 +158,7 @@ impl Default for Settings {
             show_fingers: false,
             show_bigrams: false,
             show_daily: false,
+            heatmap_range: TimeWindow::AllTime,
         }
     }
 }

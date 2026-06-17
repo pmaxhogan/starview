@@ -31,6 +31,11 @@ pub struct Stats {
     /// Total presses per local calendar day, keyed "YYYY-MM-DD".
     #[serde(default)]
     pub daily: HashMap<String, u64>,
+    /// Per-key presses per day, for time-windowed heatmaps. Keyed day -> (key
+    /// index -> count). Only accrues going forward; `presses` keeps the
+    /// complete lifetime history for the all-time view.
+    #[serde(default)]
+    pub daily_keys: HashMap<String, HashMap<usize, u64>>,
 }
 
 impl Stats {
@@ -42,16 +47,6 @@ impl Stats {
     /// One more "typed then immediately deleted" event for this key.
     pub fn record_delete(&mut self, key: usize) {
         *self.deletes.entry(key).or_insert(0) += 1;
-    }
-
-    /// Sum of all key presses ever.
-    pub fn total(&self) -> u64 {
-        self.presses.values().sum()
-    }
-
-    /// The single most-pressed key's count (the heatmap's hot end).
-    pub fn max(&self) -> u64 {
-        self.presses.values().copied().max().unwrap_or(0)
     }
 
     /// Presses recorded for one key.
@@ -83,6 +78,24 @@ impl Stats {
         *self.daily.entry(day.to_owned()).or_insert(0) += 1;
     }
 
+    /// One more press for a key on a given day (for time-windowed heatmaps).
+    pub fn record_key_day(&mut self, day: &str, key: usize) {
+        *self.daily_keys.entry(day.to_owned()).or_default().entry(key).or_insert(0) += 1;
+    }
+
+    /// Aggregate per-key presses over the given days (for a windowed heatmap).
+    pub fn key_counts_over(&self, days: &[String]) -> HashMap<usize, u64> {
+        let mut out: HashMap<usize, u64> = HashMap::new();
+        for d in days {
+            if let Some(m) = self.daily_keys.get(d) {
+                for (k, c) in m {
+                    *out.entry(*k).or_insert(0) += c;
+                }
+            }
+        }
+        out
+    }
+
     /// Presses on a given day.
     pub fn day_count(&self, day: &str) -> u64 {
         self.daily.get(day).copied().unwrap_or(0)
@@ -110,6 +123,18 @@ impl Stats {
         (presses >= MIN_ERROR_SAMPLES)
             .then(|| self.delete_count(key) as f32 / presses as f32)
     }
+}
+
+/// The last `n` local day-keys ending at (and including) `today`, newest first.
+pub fn recent_days(today: &str, n: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(mut cur) = parse_day(today) {
+        for _ in 0..n {
+            out.push(fmt_day(cur));
+            cur = prev_day(cur);
+        }
+    }
+    out
 }
 
 /// Parse "YYYY-MM-DD" into (year, month, day).
@@ -178,15 +203,14 @@ mod tests {
     }
 
     #[test]
-    fn totals_and_max() {
+    fn records_and_counts() {
         let mut s = Stats::default();
         for _ in 0..3 {
             s.record(5);
         }
         s.record(9);
-        assert_eq!(s.total(), 4);
-        assert_eq!(s.max(), 3);
         assert_eq!(s.count(5), 3);
+        assert_eq!(s.count(9), 1);
         assert_eq!(s.count(42), 0);
     }
 

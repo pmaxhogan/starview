@@ -18,7 +18,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, TranslateMessage, WM_APP, WM_HOTKEY,
 };
 
-use crate::settings::{self, Corner, FADE_STEPS, OPACITY_STEPS, SIZE_STEPS, Settings, Theme};
+use crate::settings::{
+    self, Corner, FADE_STEPS, OPACITY_STEPS, SIZE_STEPS, Settings, Theme, TimeWindow,
+};
 use crate::updater;
 
 pub enum TrayEvent {
@@ -160,6 +162,16 @@ fn run(
     let fingers = CheckMenuItem::new("Finger load chart", true, initial.show_fingers, None);
     let bigrams = CheckMenuItem::new("Show top bigrams", true, initial.show_bigrams, None);
     let daily = CheckMenuItem::new("Show daily count & streak", true, initial.show_daily, None);
+    let range_items: Vec<(TimeWindow, CheckMenuItem)> = TimeWindow::ALL
+        .into_iter()
+        .map(|w| {
+            (w, CheckMenuItem::new(w.label(), true, w == initial.heatmap_range, None))
+        })
+        .collect();
+    let range_menu = Submenu::new("Heatmap range", true);
+    for (_, item) in &range_items {
+        range_menu.append(item)?;
+    }
     let reset_stats = MenuItem::new("Reset key stats", true, None);
     // Disabled label showing the running version. Enabled "Up to date" item
     // below doubles as a manual "check for updates" button.
@@ -178,6 +190,7 @@ fn run(
     menu.append(&fade_menu)?;
     menu.append(&theme_menu)?;
     menu.append(&coloring_menu)?;
+    menu.append(&range_menu)?;
     menu.append(&wpm)?;
     menu.append(&fingers)?;
     menu.append(&bigrams)?;
@@ -274,6 +287,13 @@ fn run(
                     state.show_bigrams = bigrams.is_checked();
                 } else if *event.id() == daily.id() {
                     state.show_daily = daily.is_checked();
+                } else if let Some((range, _)) =
+                    range_items.iter().find(|(_, item)| *event.id() == item.id())
+                {
+                    state.heatmap_range = *range;
+                    for (w, item) in &range_items {
+                        item.set_checked(*w == state.heatmap_range);
+                    }
                 } else if *event.id() == reset_stats.id() {
                     on_event(TrayEvent::ResetStats);
                     continue;

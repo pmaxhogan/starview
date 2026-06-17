@@ -42,8 +42,9 @@ Order is easy/low-risk first, then the data-model and harder ones.
 - [x] **Daily counts & streaks** (v0.13.0) — per-day press totals keyed by local
   date (Win32 GetLocalTime), with a consecutive-day streak; "Show daily count &
   streak" toggle shows "N today · Sd" in the header.
-- [ ] **Time-windowed views** — today / this week / all-time toggle for the
-  heatmap + counters, from per-day buckets.
+- [x] **Time-windowed views** (v0.14.0) — "Heatmap range" submenu
+  (All-time/Today/This week) windows the press heatmap + its counter, using new
+  per-key-per-day buckets.
 - [ ] **Export / stats window** — an egui window (or file export) summarizing
   the accumulated stats.
 - [ ] **Substitution-pair typos** — when a backspaced char is replaced by a

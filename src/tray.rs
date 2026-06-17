@@ -20,6 +20,7 @@ use crate::updater;
 
 pub enum TrayEvent {
     Settings(Settings),
+    ResetStats,
     Quit,
 }
 
@@ -107,6 +108,7 @@ fn run(
     let rainbow = CheckMenuItem::new("Rainbow key ghosts", true, initial.rainbow, None);
     let heatmap = CheckMenuItem::new("Key heatmap", true, initial.heatmap, None);
     let error_heatmap = CheckMenuItem::new("Typo heatmap", true, initial.error_heatmap, None);
+    let reset_stats = MenuItem::new("Reset key stats", true, None);
     // Disabled label showing the running version. Enabled "Up to date" item
     // below doubles as a manual "check for updates" button.
     let version = MenuItem::new(format!("starview v{}", updater::current_version()), false, None);
@@ -121,6 +123,7 @@ fn run(
     menu.append(&rainbow)?;
     menu.append(&heatmap)?;
     menu.append(&error_heatmap)?;
+    menu.append(&reset_stats)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&version)?;
     menu.append(&update)?;
@@ -172,6 +175,9 @@ fn run(
                     state.heatmap = heatmap.is_checked();
                 } else if *event.id() == error_heatmap.id() {
                     state.error_heatmap = error_heatmap.is_checked();
+                } else if *event.id() == reset_stats.id() {
+                    on_event(TrayEvent::ResetStats);
+                    continue;
                 } else if *event.id() == quit.id() {
                     on_event(TrayEvent::Quit);
                     continue;

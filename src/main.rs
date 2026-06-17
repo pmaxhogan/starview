@@ -119,6 +119,7 @@ fn main() -> eframe::Result {
                 tray::spawn(cfg, move |event| {
                     let _ = tray_tx.send(match event {
                         tray::TrayEvent::Settings(s) => overlay::AppEvent::Settings(s),
+                        tray::TrayEvent::ResetStats => overlay::AppEvent::ResetStats,
                         tray::TrayEvent::Quit => overlay::AppEvent::Quit,
                     });
                     ctx.request_repaint();

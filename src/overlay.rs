@@ -28,6 +28,8 @@ pub enum AppEvent {
     Trackball(i32, i32),
     /// Settings changed from the tray menu.
     Settings(Settings),
+    /// Clear all accumulated key stats (tray menu).
+    ResetStats,
     /// Quit chosen from the tray menu.
     Quit,
 }
@@ -385,6 +387,12 @@ impl eframe::App for OverlayApp {
                         self.custom_pos = pos;
                         self.positioned = false; // re-anchor on next tick
                     }
+                }
+                AppEvent::ResetStats => {
+                    self.stats = Stats::default();
+                    self.typed.clear();
+                    stats::save(&self.stats);
+                    self.stats_dirty = false;
                 }
                 AppEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                 AppEvent::Trackball(dx, dy) => {

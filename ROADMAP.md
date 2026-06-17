@@ -13,7 +13,7 @@ Order is easy/low-risk first, then the data-model and harder ones.
 
 ## Overlay / UX
 
-- [ ] **Reset stats** — tray item that clears all accumulated counts. Tray →
+- [x] **Reset stats** (v0.4.0) — tray item that clears all accumulated counts. Tray →
   `TrayEvent::ResetStats` → `AppEvent::ResetStats`; overlay sets
   `stats = Stats::default()` and saves. (`Stats::default()` clears every field,
   so this keeps working as new stat kinds are added.)

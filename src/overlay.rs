@@ -162,6 +162,9 @@ pub struct OverlayApp {
     corner: Corner,
     /// Which monitor to dock to (index into the primary-first monitor list).
     monitor: usize,
+    /// Cover the chosen monitor entirely (centered, enlarged board on a solid
+    /// background) instead of docking a corner overlay (tray toggle).
+    fullscreen: bool,
     /// Shift-dragged position (logical points); overrides corner docking.
     custom_pos: Option<egui::Pos2>,
     /// Hamburger drag-handle rect from the last drawn frame, window-local
@@ -269,6 +272,7 @@ impl OverlayApp {
             always: settings.pin_base,
             corner: settings.corner,
             monitor: settings.monitor,
+            fullscreen: settings.fullscreen,
             custom_pos: settings.position.map(|(x, y)| pos2(x, y)),
             burger: None,
             close_btn: None,
@@ -558,6 +562,49 @@ impl OverlayApp {
         );
         painter.galley(rect.min + pad, galley, tcol);
     }
+
+    /// Place and scale the window to cover the chosen monitor for fullscreen
+    /// "display" mode. Sequenced over two ticks: first set the zoom (so the
+    /// board fills ~90% of the display), then — once that zoom has taken effect
+    /// (its `pixels_per_point` has settled) — size and position the window to
+    /// the monitor's exact bounds. `native_pixels_per_point` is the monitor's
+    /// DPI scale, independent of the zoom factor, so the fit math is stable.
+    fn layout_fullscreen(&mut self, ctx: &egui::Context) {
+        let Some(native) = ctx.native_pixels_per_point() else {
+            return;
+        };
+        let mons = crate::display::monitors();
+        let Some(m) = mons.get(self.monitor).or_else(|| mons.first()).copied() else {
+            return; // no monitor list (e.g. non-Windows): nothing to cover
+        };
+        let (pw, ph) = ((m.right - m.left) as f32, (m.bottom - m.top) as f32);
+        if pw <= 0.0 || ph <= 0.0 {
+            return;
+        }
+        // Zoom so the board (~OVERLAY_W x OVERLAY_H points) fills ~90% of the
+        // monitor on whichever axis binds first, clamped to a sane range.
+        const FILL: f32 = 0.9;
+        let target = (FILL * pw / (native * OVERLAY_W))
+            .min(FILL * ph / (native * OVERLAY_H))
+            .clamp(0.5, 12.0);
+        let want_ppp = native * target;
+        if (ctx.pixels_per_point() - want_ppp).abs() > 0.01 {
+            // Apply the zoom; the window cover waits a tick for ppp to update.
+            ctx.set_zoom_factor(target);
+            self.positioned = false;
+            ctx.request_repaint();
+        } else if !self.positioned {
+            // Zoom has settled (ppp now == want_ppp): cover the monitor exactly.
+            // OuterPosition/InnerSize are egui points (physical / ppp).
+            let ppp = ctx.pixels_per_point();
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos2(
+                m.left as f32 / ppp,
+                m.top as f32 / ppp,
+            )));
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(vec2(pw / ppp, ph / ppp)));
+            self.positioned = true;
+        }
+    }
 }
 
 impl eframe::App for OverlayApp {
@@ -650,12 +697,22 @@ impl eframe::App for OverlayApp {
                     // Re-show at full opacity and restart the timer on change.
                     self.last_activity = std::time::Instant::now();
                     let pos = s.position.map(|(x, y)| pos2(x, y));
-                    if self.corner != s.corner || self.custom_pos != pos || self.monitor != s.monitor
+                    let fs_changed = self.fullscreen != s.fullscreen;
+                    if fs_changed
+                        || self.corner != s.corner
+                        || self.custom_pos != pos
+                        || self.monitor != s.monitor
                     {
+                        self.fullscreen = s.fullscreen;
                         self.corner = s.corner;
                         self.monitor = s.monitor;
                         self.custom_pos = pos;
                         self.positioned = false; // re-anchor on next tick
+                        // Fullscreen drives its own zoom; toggling it makes the
+                        // normal scale-zoom (and window resize) re-apply.
+                        if fs_changed {
+                            self.applied_scale = None;
+                        }
                     }
                 }
                 AppEvent::ExportStats => self.export_stats(),
@@ -761,10 +818,17 @@ impl eframe::App for OverlayApp {
             }
         }
 
+        // Fullscreen "display" mode owns window sizing + zoom: it covers the
+        // chosen monitor and enlarges the board to fill it. The corner/scale
+        // paths below are skipped while it's on.
+        if self.fullscreen {
+            self.layout_fullscreen(ctx);
+        }
+
         // Apply the overlay-size zoom and resize the window to match, once per
         // change. The zoom factor scales all UI content; the window grows by
         // the same factor so the panel still fits, then re-anchors.
-        if self.applied_scale != Some(self.scale) {
+        if !self.fullscreen && self.applied_scale != Some(self.scale) {
             let z = self.scale as f32 / 100.0;
             ctx.set_zoom_factor(z);
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
@@ -778,7 +842,7 @@ impl eframe::App for OverlayApp {
         // monitor's corner. Uses the actual window size (so right/bottom corners
         // are correct at any zoom) and the monitor's desktop offset (so it can
         // dock to a secondary display), both in logical points.
-        if !self.positioned {
+        if !self.fullscreen && !self.positioned {
             if let Some(pos) = self.custom_pos {
                 ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
                 self.positioned = true;
@@ -827,8 +891,13 @@ impl eframe::App for OverlayApp {
         // stops presenting, so its swapchain kept the previous layer's frame
         // and flashed it on re-show — content-level hiding swaps in a single
         // frame instead. Forced mode also shows layer 0 for screenshots.
+        // Fullscreen mode always shows content (even on the base layer or when
+        // the board is disconnected) so the dedicated display is never blank.
         self.shown = !self.hidden
-            && (self.force_layer.is_some() || self.always || (self.connected && self.layer != 0));
+            && (self.fullscreen
+                || self.force_layer.is_some()
+                || self.always
+                || (self.connected && self.layer != 0));
 
         // Shift-drag via the panel's hamburger icon. The window is normally
         // click-through (WS_EX_TRANSPARENT) and never receives real mouse
@@ -905,8 +974,10 @@ impl eframe::App for OverlayApp {
             if interactive {
                 self.last_activity = now;
             }
+            // Fullscreen mode never auto-fades — a dedicated display shouldn't
+            // blank itself when idle.
             let fade = match self.fade_after {
-                Some(timeout) if self.force_layer.is_none() => {
+                Some(timeout) if self.force_layer.is_none() && !self.fullscreen => {
                     let idle = now.duration_since(self.last_activity);
                     if idle < timeout {
                         // Wake right when the timeout elapses to start fading.
@@ -926,7 +997,11 @@ impl eframe::App for OverlayApp {
             // Under HDR, raise the effective opacity to offset the washout
             // (see HDR_OPACITY_COMPENSATION) so a given setting reads the same
             // as on an SDR display.
-            let opacity = if crate::hdr::active() {
+            let opacity = if self.fullscreen {
+                // A full-display board renders fully opaque on its solid
+                // background; the overlay opacity setting doesn't apply.
+                100.0
+            } else if crate::hdr::active() {
                 let gap = 100.0 - self.opacity as f32;
                 self.opacity as f32 + gap * HDR_OPACITY_COMPENSATION
             } else {
@@ -983,12 +1058,22 @@ impl eframe::App for OverlayApp {
         // (forced mode always shows it, for screenshots).
         let ball = (self.ball_seen || self.force_layer.is_some()).then_some(self.ball);
 
-        // Hug the same corner of the window that the window hugs on screen.
-        let align = match self.corner {
-            Corner::TopLeft => Align2::LEFT_TOP,
-            Corner::TopRight => Align2::RIGHT_TOP,
-            Corner::BottomLeft => Align2::LEFT_BOTTOM,
-            Corner::BottomRight => Align2::RIGHT_BOTTOM,
+        // Fullscreen mode centers the board on a solid, full-window background;
+        // otherwise hug the same corner of the window that the window hugs on
+        // screen.
+        let align = if self.fullscreen {
+            // Paint the whole display its panel color so the board reads as an
+            // intentional full screen rather than a panel over the wallpaper.
+            ui.painter()
+                .rect_filled(ui.max_rect(), CornerRadius::ZERO, palette().panel_bg);
+            Align2::CENTER_CENTER
+        } else {
+            match self.corner {
+                Corner::TopLeft => Align2::LEFT_TOP,
+                Corner::TopRight => Align2::RIGHT_TOP,
+                Corner::BottomLeft => Align2::LEFT_BOTTOM,
+                Corner::BottomRight => Align2::RIGHT_BOTTOM,
+            }
         };
 
         // When rainbow mode is on, pass the per-key captured hues.
@@ -1033,15 +1118,24 @@ impl eframe::App for OverlayApp {
         };
         // Top-right controls: hamburger (Shift-drag to move) and, to its left,
         // an X (Shift+click to quit). Both sit in the header's right margin.
-        let icon = vec2(15.0, 15.0);
-        let burger_rect =
-            Rect::from_min_size(pos2(panel.max.x - 8.0 - icon.x, panel.min.y + 8.0), icon);
-        let close_rect =
-            Rect::from_min_size(pos2(burger_rect.min.x - 10.0 - icon.x, panel.min.y + 8.0), icon);
-        draw_burger(ui.painter(), burger_rect, self.hot || self.drag.is_some());
-        draw_close(ui.painter(), close_rect, self.close_hot);
-        self.burger = Some(burger_rect.expand(5.0));
-        self.close_btn = Some(close_rect.expand(5.0));
+        // Skipped in fullscreen mode — the window is pinned to its display, so
+        // there's nothing to drag or close there (quit via the tray).
+        if self.fullscreen {
+            self.burger = None;
+            self.close_btn = None;
+        } else {
+            let icon = vec2(15.0, 15.0);
+            let burger_rect =
+                Rect::from_min_size(pos2(panel.max.x - 8.0 - icon.x, panel.min.y + 8.0), icon);
+            let close_rect = Rect::from_min_size(
+                pos2(burger_rect.min.x - 10.0 - icon.x, panel.min.y + 8.0),
+                icon,
+            );
+            draw_burger(ui.painter(), burger_rect, self.hot || self.drag.is_some());
+            draw_close(ui.painter(), close_rect, self.close_hot);
+            self.burger = Some(burger_rect.expand(5.0));
+            self.close_btn = Some(close_rect.expand(5.0));
+        }
 
         self.draw_breadcrumb(ui, panel);
     }

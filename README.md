@@ -40,7 +40,13 @@ A system tray icon (dark disc with a blue dot) provides runtime settings,
 persisted to `%LOCALAPPDATA%\starview\settings.json`: **Pin base layer**
 (keep the overlay up on the base layer too; `--always` forces this on for the
 session), **Overlay corner** (which display corner to dock to; bottom corners
-leave taskbar clearance), **Opacity** (100–40%), and **Auto-hide after** (fade
+leave taskbar clearance), **Overlay monitor** (which display to dock to, shown
+when more than one is connected), **Fullscreen display** (cover the chosen
+monitor entirely — a centered, enlarged board on a solid background instead of a
+corner overlay; always opaque, never auto-hides, and always shows the current
+layer even on the base layer — for dedicating a screen to starview, e.g. a phone
+used as a USB/streamed second monitor), **Opacity** (100–40%), and
+**Auto-hide after** (fade
 the overlay out after an idle interval — Never/5s/15s/30s/1m/2m/5m; a layer
 change or keypress brings it back), **Rainbow key ghosts** (color the
 pressed/afterglow key highlights as a rainbow that sweeps across the board),

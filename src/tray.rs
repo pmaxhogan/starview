@@ -116,6 +116,9 @@ fn run(
     for (_, item) in &monitor_items {
         monitor_menu.append(item)?;
     }
+    // Fullscreen "display" mode: cover the chosen monitor entirely. Pair it
+    // with "Overlay monitor" to dedicate a secondary display to starview.
+    let fullscreen = CheckMenuItem::new("Fullscreen display", true, initial.fullscreen, None);
 
     let opacity_items: Vec<(u8, CheckMenuItem)> = OPACITY_STEPS
         .into_iter()
@@ -188,6 +191,7 @@ fn run(
     if monitor_items.len() > 1 {
         menu.append(&monitor_menu)?;
     }
+    menu.append(&fullscreen)?;
     menu.append(&opacity_menu)?;
     menu.append(&size_menu)?;
     menu.append(&fade_menu)?;
@@ -261,6 +265,8 @@ fn run(
                 if *event.id() == pin.id() {
                     // muda already toggled the check mark.
                     state.pin_base = pin.is_checked();
+                } else if *event.id() == fullscreen.id() {
+                    state.fullscreen = fullscreen.is_checked();
                 } else if let Some((theme, _)) =
                     theme_items.iter().find(|(_, item)| *event.id() == item.id())
                 {

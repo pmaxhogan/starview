@@ -1,0 +1,49 @@
+# git-cliff configuration — builds CHANGELOG.md from the commits between
+# release tags. starview's commits aren't Conventional Commits, so they're
+# grouped by a simple verb heuristic, and the "Release vX.Y.Z" version-bump
+# commits (and merges) are dropped as noise.
+#
+# Regenerate locally with:  git-cliff -o CHANGELOG.md
+# CI regenerates it on every release tag, so edit commit messages, not this file.
+
+[changelog]
+header = """
+# Changelog
+
+All notable changes to starview, newest first. Generated from the git history
+by [git-cliff](https://git-cliff.org) — edit commit messages, not this file.\
+"""
+# A version block: a linked, dated heading, then commits grouped by kind. The
+# `<!-- N -->` markers only order the groups (stripped from the rendered title).
+body = '''
+
+## [{% if version %}{{ version }}{% else %}Unreleased{% endif %}]({% if version %}https://github.com/pmaxhogan/starview/releases/tag/{{ version }}{% else %}https://github.com/pmaxhogan/starview/commits/main{% endif %}) — {% if version %}{{ timestamp | date(format="%Y-%m-%d") }}{% else %}unreleased{% endif %}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | split(pat="\n") | first | trim }}
+{%- endfor %}
+{% endfor %}'''
+footer = ""
+trim = false
+# Collapse any run of 3+ newlines the template leaves behind into a single
+# blank line, so spacing between versions/groups is uniform.
+postprocessors = [{ pattern = '\n{3,}', replace = "\n\n" }]
+
+[git]
+conventional_commits = false
+filter_unconventional = false
+filter_commits = false
+protect_breaking_commits = false
+split_commits = false
+# Only v* tags mark releases; commits within a tag are listed oldest-first.
+tag_pattern = "v[0-9]*"
+sort_commits = "oldest"
+commit_parsers = [
+  { message = "^Release v", skip = true },
+  { message = "^Update changelog", skip = true },
+  { message = "^Merge ", skip = true },
+  { message = "^(Add|Track|Count|Show|Render)", group = "<!-- 0 -->Added" },
+  { message = "^Fix", group = "<!-- 2 -->Fixed" },
+  { message = ".*", group = "<!-- 1 -->Changed" },
+]

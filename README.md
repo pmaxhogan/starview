@@ -28,7 +28,10 @@ item can be clicked to check for updates on demand. Or build from source:
 
 Releases are built by the `release` GitHub Actions workflow on `v*` tags
 (tag must match `Cargo.toml`'s version); each release carries the installer,
-a portable exe, and SHA256SUMS.
+a portable exe, and SHA256SUMS. Release notes and [`CHANGELOG.md`](CHANGELOG.md)
+are generated from the git history by [git-cliff](https://git-cliff.org), so the
+commits in each version are listed automatically — edit commit messages, not the
+changelog.
 
 ## Usage
 

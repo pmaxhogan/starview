@@ -1,1 +1,3 @@
 /target
+# Per-release notes generated in CI from the changelog; not committed.
+/RELEASE_NOTES.md

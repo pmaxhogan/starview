@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
-use tray_icon::{Icon, TrayIconBuilder};
+use tray_icon::{Icon, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, RegisterHotKey,
@@ -98,24 +98,13 @@ fn run(
     for (_, item) in &corner_items {
         corner_menu.append(item)?;
     }
-    // Monitor picker — only meaningful with more than one display.
-    let monitors = crate::display::monitors();
-    let monitor_items: Vec<(usize, CheckMenuItem)> = monitors
-        .iter()
-        .enumerate()
-        .map(|(i, m)| {
-            let label = if m.primary {
-                format!("Monitor {} (primary)", i + 1)
-            } else {
-                format!("Monitor {}", i + 1)
-            };
-            (i, CheckMenuItem::new(label, true, i == initial.monitor, None))
-        })
-        .collect();
+    // Monitor picker — only meaningful with more than one display. Populated
+    // by rescan_monitors below and re-scanned on every tray click, so a
+    // plugged/unplugged display is reflected the next time the menu opens.
     let monitor_menu = Submenu::new("Overlay monitor", true);
-    for (_, item) in &monitor_items {
-        monitor_menu.append(item)?;
-    }
+    let mut monitor_items: Vec<(usize, CheckMenuItem)> = Vec::new();
+    let mut monitor_menu_shown = false;
+    let mut monitor_sig: Vec<MonitorSig> = Vec::new();
     // Fullscreen "display" mode: cover the chosen monitor entirely. Pair it
     // with "Overlay monitor" to dedicate a secondary display to starview.
     let fullscreen = CheckMenuItem::new("Fullscreen display", true, initial.fullscreen, None);
@@ -188,9 +177,16 @@ fn run(
     let menu = Menu::new();
     menu.append(&pin)?;
     menu.append(&corner_menu)?;
-    if monitor_items.len() > 1 {
-        menu.append(&monitor_menu)?;
-    }
+    // Populate "Overlay monitor" from the current displays; this inserts the
+    // submenu right here (index 2) when there's more than one monitor.
+    rescan_monitors(
+        &menu,
+        &monitor_menu,
+        &mut monitor_items,
+        &mut monitor_menu_shown,
+        &mut monitor_sig,
+        initial.monitor,
+    );
     menu.append(&fullscreen)?;
     menu.append(&opacity_menu)?;
     menu.append(&size_menu)?;
@@ -218,10 +214,12 @@ fn run(
     }
 
     // Must stay alive for the icon to remain in the tray.
+    // Box a clone for the tray (a muda Menu is an Rc handle, so the clone and
+    // `menu` drive the same underlying menu); keep `menu` to mutate at runtime.
     let _tray = TrayIconBuilder::new()
         .with_tooltip("starview — keyboard layer overlay")
         .with_icon(make_icon())
-        .with_menu(Box::new(menu))
+        .with_menu(Box::new(menu.clone()))
         .build()?;
 
     TRAY_THREAD.store(unsafe { GetCurrentThreadId() }, Ordering::Relaxed);
@@ -255,6 +253,25 @@ fn run(
                     UpdateState::UpToDate => update.set_text("Up to date"),
                 }
                 update.set_enabled(true);
+            }
+            // A tray click is about to open the menu: the menu pops on
+            // button-up, but a Click{Down} event fires first (same thread,
+            // before TrackPopupMenu). Re-scan monitors in that gap so a
+            // plugged/unplugged display shows up — a no-op when unchanged.
+            while let Ok(tray_event) = TrayIconEvent::receiver().try_recv() {
+                if matches!(
+                    tray_event,
+                    TrayIconEvent::Click { button_state: MouseButtonState::Down, .. }
+                ) {
+                    rescan_monitors(
+                        &menu,
+                        &monitor_menu,
+                        &mut monitor_items,
+                        &mut monitor_menu_shown,
+                        &mut monitor_sig,
+                        settings::load().monitor,
+                    );
+                }
             }
             // Menu clicks were queued by the dispatch above.
             while let Ok(event) = MenuEvent::receiver().try_recv() {
@@ -383,6 +400,82 @@ fn run(
     Ok(())
 }
 
+/// Identity of a display for change detection: its physical rect + primary
+/// flag. The whole list is compared so a resolution change, a moved monitor,
+/// or an add/remove all count as "changed".
+type MonitorSig = (i32, i32, i32, i32, bool);
+
+/// Decide the monitor submenu from a display scan: a `(label, checked)` per
+/// monitor (the selected one checked), and whether the submenu should appear
+/// at all — only meaningful with more than one display. Pure, so it's unit
+/// tested; rescan_monitors turns it into actual menu items.
+fn monitor_menu_plan(
+    mons: &[crate::display::Monitor],
+    selected: usize,
+) -> (Vec<(String, bool)>, bool) {
+    let labels = mons
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let label = if m.primary {
+                format!("Monitor {} (primary)", i + 1)
+            } else {
+                format!("Monitor {}", i + 1)
+            };
+            (label, i == selected)
+        })
+        .collect();
+    (labels, mons.len() > 1)
+}
+
+/// Rebuild the "Overlay monitor" submenu from a fresh display scan. Called at
+/// startup and again on each tray click (before the menu opens), so plugging
+/// or unplugging a monitor is reflected without a restart. No-ops when the set
+/// is unchanged. The submenu is only present in the top menu with >1 display,
+/// inserted at index 2 (right after "Pin base layer" and "Overlay corner").
+fn rescan_monitors(
+    menu: &Menu,
+    monitor_menu: &Submenu,
+    items: &mut Vec<(usize, CheckMenuItem)>,
+    shown: &mut bool,
+    sig: &mut Vec<MonitorSig>,
+    selected: usize,
+) {
+    const INSERT_AT: usize = 2;
+    let mons = crate::display::monitors();
+    let new_sig: Vec<MonitorSig> = mons
+        .iter()
+        .map(|m| (m.left, m.top, m.right, m.bottom, m.primary))
+        .collect();
+    if new_sig == *sig {
+        return; // Displays unchanged — leave the menu (and check marks) as is.
+    }
+    *sig = new_sig;
+
+    // Drop the old items, then build fresh ones for the current displays.
+    for (_, item) in items.iter() {
+        let _ = monitor_menu.remove(item);
+    }
+    let (labels, should_show) = monitor_menu_plan(&mons, selected);
+    *items = labels
+        .into_iter()
+        .enumerate()
+        .map(|(i, (label, checked))| (i, CheckMenuItem::new(label, true, checked, None)))
+        .collect();
+    for (_, item) in items.iter() {
+        let _ = monitor_menu.append(item);
+    }
+
+    // Show the submenu only when picking a monitor is meaningful (>1 display).
+    if should_show && !*shown {
+        let _ = menu.insert(monitor_menu, INSERT_AT);
+        *shown = true;
+    } else if !should_show && *shown {
+        let _ = menu.remove(monitor_menu);
+        *shown = false;
+    }
+}
+
 /// Dark disc with the trackball-blue dot — drawn in code, no asset file.
 fn make_icon() -> Icon {
     const S: usize = 32;
@@ -401,4 +494,51 @@ fn make_icon() -> Icon {
         }
     }
     Icon::from_rgba(rgba, S as u32, S as u32).expect("static icon dimensions are valid")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::monitor_menu_plan;
+    use crate::display::Monitor;
+
+    fn mon(left: i32, primary: bool) -> Monitor {
+        Monitor { left, top: 0, right: left + 1920, bottom: 1080, primary }
+    }
+
+    #[test]
+    fn single_monitor_submenu_is_hidden() {
+        let (labels, show) = monitor_menu_plan(&[mon(0, true)], 0);
+        assert!(!show, "picking a monitor is pointless with one display");
+        assert_eq!(labels, vec![("Monitor 1 (primary)".to_owned(), true)]);
+    }
+
+    #[test]
+    fn multiple_monitors_label_and_mark_selection() {
+        let mons = [mon(0, true), mon(1920, false), mon(3840, false)];
+        let (labels, show) = monitor_menu_plan(&mons, 1);
+        assert!(show, "submenu shown once there's more than one display");
+        assert_eq!(
+            labels,
+            vec![
+                ("Monitor 1 (primary)".to_owned(), false),
+                ("Monitor 2".to_owned(), true),
+                ("Monitor 3".to_owned(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn stale_selection_checks_nothing() {
+        // The saved monitor index can outlive the display that had it.
+        let mons = [mon(0, true), mon(1920, false)];
+        let (labels, _) = monitor_menu_plan(&mons, 5);
+        assert!(labels.iter().all(|(_, checked)| !checked));
+    }
+
+    #[test]
+    fn no_displays_is_hidden_and_empty() {
+        let (labels, show) = monitor_menu_plan(&[], 0);
+        assert!(!show);
+        assert!(labels.is_empty());
+    }
 }

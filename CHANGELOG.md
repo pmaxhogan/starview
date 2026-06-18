@@ -3,6 +3,12 @@
 All notable changes to starview, newest first. Generated from the git history
 by [git-cliff](https://git-cliff.org) — edit commit messages, not this file.
 
+## [v0.18.2](https://github.com/pmaxhogan/starview/releases/tag/v0.18.2) — 2026-06-18
+
+### Added
+
+- Add an auto-generated changelog and wire it into releases
+
 ## [v0.18.1](https://github.com/pmaxhogan/starview/releases/tag/v0.18.1) — 2026-06-18
 
 ### Changed

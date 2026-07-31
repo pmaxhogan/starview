@@ -1,4 +1,4 @@
-//! Persisted user settings (%LOCALAPPDATA%\starview\settings.json).
+//! Persisted user settings (settings.json in the starview data directory).
 
 use std::fs;
 use std::path::PathBuf;
@@ -200,9 +200,27 @@ pub const FADE_STEPS: [(&str, u16); 7] = [
     ("5 minutes", 300),
 ];
 
+/// The starview data directory: %LOCALAPPDATA%\starview on Windows,
+/// ~/Library/Application Support/starview on macOS.
+pub fn data_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        let base = std::env::var_os("LOCALAPPDATA")?;
+        Some(PathBuf::from(base).join("starview"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME")?;
+        Some(PathBuf::from(home).join("Library/Application Support/starview"))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        None
+    }
+}
+
 fn path() -> Option<PathBuf> {
-    let base = std::env::var_os("LOCALAPPDATA")?;
-    Some(PathBuf::from(base).join("starview").join("settings.json"))
+    Some(data_dir()?.join("settings.json"))
 }
 
 pub fn load() -> Settings {

@@ -8,7 +8,46 @@ permissions:
   contents: write
 
 jobs:
+  # Apple Silicon .app bundle, ad-hoc signed (no Developer ID): first launch
+  # of a downloaded copy needs right-click > Open or
+  # `xattr -d com.apple.quarantine starview.app`.
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag matches Cargo.toml version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          if [ "$tag" != "$ver" ]; then
+            echo "tag v$tag does not match Cargo.toml version $ver" >&2
+            exit 1
+          fi
+
+      - name: Update Rust
+        run: rustup update stable && rustup default stable
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Bundle starview.app
+        run: |
+          scripts/make-app.sh
+          # ditto preserves bundle structure + permissions in the zip.
+          ditto -c -k --keepParent target/release/starview.app starview-macos.zip
+          shasum -a 256 starview-macos.zip > SHA256SUMS-macos.txt
+          cat SHA256SUMS-macos.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: |
+            starview-macos.zip
+            SHA256SUMS-macos.txt
+
   release:
+    needs: build-macos
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,6 +72,11 @@ jobs:
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=$ver installer\starview.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
+      - name: Fetch macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos
+
       - name: Checksums
         shell: pwsh
         run: |
@@ -40,6 +84,7 @@ jobs:
           Get-FileHash starview.exe, installer\Output\starview-setup.exe -Algorithm SHA256 |
             ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
             Set-Content SHA256SUMS.txt
+          Get-Content SHA256SUMS-macos.txt | Add-Content SHA256SUMS.txt
           Get-Content SHA256SUMS.txt
 
       - name: Install git-cliff
@@ -58,6 +103,7 @@ jobs:
           files: |
             installer/Output/starview-setup.exe
             starview.exe
+            starview-macos.zip
             SHA256SUMS.txt
 
   # Regenerate CHANGELOG.md from the full history and commit it back to main, so

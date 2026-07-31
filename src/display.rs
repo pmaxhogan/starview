@@ -57,7 +57,48 @@ pub fn monitors() -> Vec<Monitor> {
     out
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn monitors() -> Vec<Monitor> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSScreen;
+
+    // NSScreen is main-thread-only; on macOS monitors() is only called from
+    // the main thread (overlay update + tray poll), but guard anyway.
+    let Some(mtm) = MainThreadMarker::new() else {
+        return Vec::new();
+    };
+    let screens = NSScreen::screens(mtm);
+    // Cocoa's global space is bottom-left-origin with y up; the rest of
+    // starview (and winit) use top-left-origin physical pixels. The primary
+    // screen has origin (0,0), so its frame height anchors the flip; each
+    // screen's rect scales by its own backing factor, matching winit's
+    // logical->physical convention.
+    let primary_h = screens
+        .iter()
+        .map(|s| s.frame())
+        .find(|f| f.origin.x == 0.0 && f.origin.y == 0.0)
+        .map(|f| f.size.height)
+        .unwrap_or(0.0);
+    let mut out: Vec<Monitor> = screens
+        .iter()
+        .map(|s| {
+            let f = s.frame();
+            let scale = s.backingScaleFactor();
+            let top = primary_h - (f.origin.y + f.size.height);
+            Monitor {
+                left: (f.origin.x * scale) as i32,
+                top: (top * scale) as i32,
+                right: ((f.origin.x + f.size.width) * scale) as i32,
+                bottom: ((top + f.size.height) * scale) as i32,
+                primary: f.origin.x == 0.0 && f.origin.y == 0.0,
+            }
+        })
+        .collect();
+    out.sort_by_key(|m| (!m.primary, m.left, m.top));
+    out
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn monitors() -> Vec<Monitor> {
     Vec::new()
 }
@@ -69,7 +110,12 @@ pub fn today() -> String {
     format!("{:04}-{:02}-{:02}", st.wYear, st.wMonth, st.wDay)
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn today() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn today() -> String {
     "1970-01-01".to_owned()
 }

@@ -145,13 +145,8 @@ struct GqlRevision {
 }
 
 fn cache_path(hash_id: &str) -> Option<PathBuf> {
-    let base = std::env::var_os("LOCALAPPDATA")?;
     // v2 suffix: invalidates pre-keys caches.
-    Some(
-        PathBuf::from(base)
-            .join("starview")
-            .join(format!("layout-{hash_id}-v2.json")),
-    )
+    Some(crate::settings::data_dir()?.join(format!("layout-{hash_id}-v2.json")))
 }
 
 fn fetch_remote(hash_id: &str, geometry: &str) -> Result<LayoutInfo> {

@@ -1,14 +1,17 @@
 //! The overlay window: a frameless, transparent, click-through, always-on-top
 //! bubble in the top-right corner naming the active non-base layer.
 //!
-//! Window behavior relies on raw Win32 extended styles (see `win32` below):
-//! winit can't express NOACTIVATE/TOOLWINDOW, and it rewrites GWL_EXSTYLE
-//! wholesale on its own flag changes, so the styles are re-asserted every
-//! `logic` tick (a no-op compare once stable).
+//! Window behavior relies on native window tweaks (see the `win32` / `macos`
+//! modules below): winit can't express NOACTIVATE/TOOLWINDOW (Windows) or
+//! window level / Spaces behavior (macOS), and it rewrites window state on
+//! its own flag changes, so the styles are re-asserted every `logic` tick (a
+//! no-op compare once stable).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::Receiver;
+#[cfg(target_os = "macos")]
+use std::sync::mpsc::Sender;
 
 use eframe::egui;
 use egui::epaint::TextShape;
@@ -37,6 +40,19 @@ pub enum AppEvent {
     ToggleOverlay,
     /// Quit chosen from the tray menu.
     Quit,
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+impl AppEvent {
+    pub fn from_tray(event: crate::tray::TrayEvent) -> Self {
+        match event {
+            crate::tray::TrayEvent::Settings(s) => AppEvent::Settings(s),
+            crate::tray::TrayEvent::ResetStats => AppEvent::ResetStats,
+            crate::tray::TrayEvent::ExportStats => AppEvent::ExportStats,
+            crate::tray::TrayEvent::ToggleOverlay => AppEvent::ToggleOverlay,
+            crate::tray::TrayEvent::Quit => AppEvent::Quit,
+        }
+    }
 }
 
 pub const OVERLAY_W: f32 = 480.0;
@@ -101,11 +117,7 @@ fn accent_color() -> Color32 {
 }
 
 fn palette() -> Palette {
-    #[cfg(windows)]
-    let hdr = crate::hdr::active();
-    #[cfg(not(windows))]
-    let hdr = false;
-    if hdr {
+    if crate::hdr::active() {
         Palette {
             panel_bg: Color32::from_rgb(16, 18, 28),
             text: Color32::WHITE,
@@ -245,6 +257,11 @@ pub struct OverlayApp {
     stats_dirty: bool,
     /// Last time `stats` was flushed to disk (debounces rapid typing).
     stats_saved: std::time::Instant,
+    /// macOS: the tray (an AppKit object) must live and be polled on the main
+    /// thread, so the app owns it and drains it each frame, feeding events
+    /// back through the same channel as the other sources.
+    #[cfg(target_os = "macos")]
+    mac_tray: Option<(crate::tray::TrayState, Sender<AppEvent>)>,
 }
 
 impl OverlayApp {
@@ -311,7 +328,16 @@ impl OverlayApp {
             last_cursor: None,
             stats_dirty: false,
             stats_saved: std::time::Instant::now(),
+            #[cfg(target_os = "macos")]
+            mac_tray: None,
         }
+    }
+
+    /// macOS: hand over the main-thread tray (built during app creation) and
+    /// a sender for routing its events into the app's channel.
+    #[cfg(target_os = "macos")]
+    pub fn set_mac_tray(&mut self, tray: crate::tray::TrayState, tx: Sender<AppEvent>) {
+        self.mac_tray = Some((tray, tx));
     }
 
     /// The effective tap keycode for a physical key index on the active layer,
@@ -617,6 +643,16 @@ impl eframe::App for OverlayApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         // Keep today's date current for the per-day stats buckets.
         self.today = crate::display::today();
+        // macOS: the tray lives on this (main) thread; poll it here so menu
+        // clicks, the global hotkey, and update-check results feed the same
+        // event channel as everything else.
+        #[cfg(target_os = "macos")]
+        if let Some((tray, tx)) = &mut self.mac_tray {
+            let tx = tx.clone();
+            tray.drain(&mut move |event| {
+                let _ = tx.send(AppEvent::from_tray(event));
+            });
+        }
         // Drain into a Vec first so the loop body can call &mut self methods
         // (e.g. track_typo) without holding a borrow on self.events.
         let events: Vec<AppEvent> = self.events.try_iter().collect();
@@ -848,7 +884,6 @@ impl eframe::App for OverlayApp {
                 self.positioned = true;
             } else {
                 let win = ctx.input(|i| i.viewport().inner_rect.map(|r| r.size()));
-                #[cfg(windows)]
                 let mon = {
                     let ppp = ctx.pixels_per_point();
                     let mons = crate::display::monitors();
@@ -858,8 +893,6 @@ impl eframe::App for OverlayApp {
                             (m.left as f32 / ppp, m.top as f32 / ppp, m.right as f32 / ppp, m.bottom as f32 / ppp)
                         })
                 };
-                #[cfg(not(windows))]
-                let mon: Option<(f32, f32, f32, f32)> = None;
 
                 if let (Some(rect), Some(size)) = (mon, win) {
                     ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(corner_pos_in_rect(
@@ -871,7 +904,7 @@ impl eframe::App for OverlayApp {
                 } else if mon.is_none()
                     && let Some(size) = ctx.input(|i| i.viewport().monitor_size)
                 {
-                    // Non-Windows fallback: dock within the current monitor.
+                    // No monitor list (e.g. Linux): dock within the current monitor.
                     ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(corner_pos(
                         self.corner,
                         size,
@@ -900,16 +933,15 @@ impl eframe::App for OverlayApp {
                 || (self.connected && self.layer != 0));
 
         // Shift-drag via the panel's hamburger icon. The window is normally
-        // click-through (WS_EX_TRANSPARENT) and never receives real mouse
-        // input, so global cursor/key state is polled instead; click-through
-        // is dropped only while Shift is over the icon (or a drag is live) so
-        // that specific click can't fall through to the window underneath.
-        #[cfg(windows)]
+        // click-through and never receives real mouse input, so global
+        // cursor/key state is polled instead; click-through is dropped only
+        // while Shift is over the icon (or a drag is live) so that specific
+        // click can't fall through to the window underneath.
         let interactive = {
-            let shift = win32::shift_down();
-            let button = win32::lbutton_down();
+            let shift = platform::shift_down();
+            let button = platform::lbutton_down();
             let ppp = ctx.pixels_per_point();
-            let cursor = win32::cursor_pos().map(|(x, y)| pos2(x as f32 / ppp, y as f32 / ppp));
+            let cursor = platform::cursor_pos().map(|(x, y)| pos2(x as f32 / ppp, y as f32 / ppp));
             let window = ctx.input(|i| i.viewport().inner_rect);
             // Is the cursor over a window-local control rect? (controls are
             // stored in window-local points; the cursor is desktop-logical.)
@@ -927,7 +959,7 @@ impl eframe::App for OverlayApp {
                     // (dragging onto an adjacent monitor still works — it
                     // clamps to whichever monitor the cursor is over).
                     if let Some((l, t, r, b)) =
-                        win32::monitor_rect_for_point((c.x * ppp) as i32, (c.y * ppp) as i32)
+                        platform::monitor_rect_for_point((c.x * ppp) as i32, (c.y * ppp) as i32)
                     {
                         let (l, t, r, b) =
                             (l as f32 / ppp, t as f32 / ppp, r as f32 / ppp, b as f32 / ppp);
@@ -965,7 +997,6 @@ impl eframe::App for OverlayApp {
             self.hot || self.close_hot || self.drag.is_some()
         };
 
-        #[cfg(windows)]
         {
             // Auto-fade: once idle past the timeout, ramp alpha to zero over a
             // short fade. Activity (layer change / keypress / drag) resets the
@@ -1008,7 +1039,7 @@ impl eframe::App for OverlayApp {
                 self.opacity as f32
             };
             let alpha = (opacity / 100.0 * 255.0 * fade).round() as u8;
-            win32::assert_overlay_styles(
+            platform::assert_overlay_styles(
                 frame,
                 !interactive,
                 alpha,
@@ -1180,7 +1211,7 @@ fn draw_burger(painter: &egui::Painter, rect: Rect, hot: bool) {
         let y = lines.min.y + lines.height() * t;
         painter.line_segment(
             [pos2(lines.min.x, y), pos2(lines.max.x, y)],
-            egui::Stroke::new(1.5, color),
+            egui::Stroke::new(1.5_f32, color),
         );
     }
 }
@@ -1190,10 +1221,10 @@ fn draw_close(painter: &egui::Painter, rect: Rect, hot: bool) {
     control_bg(painter, rect, hot);
     let color = control_color(hot);
     let x = rect.shrink(2.0);
-    painter.line_segment([x.min, x.max], egui::Stroke::new(1.5, color));
+    painter.line_segment([x.min, x.max], egui::Stroke::new(1.5_f32, color));
     painter.line_segment(
         [pos2(x.min.x, x.max.y), pos2(x.max.x, x.min.y)],
-        egui::Stroke::new(1.5, color),
+        egui::Stroke::new(1.5_f32, color),
     );
 }
 
@@ -1316,14 +1347,19 @@ fn parse_hex_color(s: &str) -> Option<Color32> {
     Some(Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))
 }
 
+/// Extra top clearance so top corners tuck under the macOS menu bar (the
+/// overlay's window level floats above it) instead of covering the clock.
+const TOP_CLEARANCE: f32 = if cfg!(target_os = "macos") { 30.0 } else { 0.0 };
+
 fn corner_pos(corner: Corner, monitor: egui::Vec2) -> egui::Pos2 {
     let m = SCREEN_MARGIN;
+    let top = m + TOP_CLEARANCE;
     // Extra clearance for the taskbar on bottom corners.
     let bottom = monitor.y - OVERLAY_H - 52.0;
     let right = monitor.x - OVERLAY_W - m;
     match corner {
-        Corner::TopLeft => pos2(m, m),
-        Corner::TopRight => pos2(right, m),
+        Corner::TopLeft => pos2(m, top),
+        Corner::TopRight => pos2(right, top),
         Corner::BottomLeft => pos2(m, bottom),
         Corner::BottomRight => pos2(right, bottom),
     }
@@ -1334,12 +1370,13 @@ fn corner_pos(corner: Corner, monitor: egui::Vec2) -> egui::Pos2 {
 /// desktop offset so it works on any display.
 fn corner_pos_in_rect(corner: Corner, (l, t, r, b): (f32, f32, f32, f32), win: egui::Vec2) -> egui::Pos2 {
     let m = SCREEN_MARGIN;
+    let top = t + m + TOP_CLEARANCE;
     let right = r - win.x - m;
     // Extra clearance for the taskbar on bottom corners.
     let bottom = b - win.y - 52.0;
     match corner {
-        Corner::TopLeft => pos2(l + m, t + m),
-        Corner::TopRight => pos2(right, t + m),
+        Corner::TopLeft => pos2(l + m, top),
+        Corner::TopRight => pos2(right, top),
         Corner::BottomLeft => pos2(l + m, bottom),
         Corner::BottomRight => pos2(right, bottom),
     }
@@ -1555,7 +1592,7 @@ fn draw_board(
         // its outer edge meets the dark keycap gap.
         let press_ring = ((heatmap.is_some() || error.is_some()) && accent_alpha > 0).then(|| {
             let a = ((accent_alpha as f32 / HELD_ALPHA as f32) * 235.0).round() as u8;
-            egui::Stroke::new(2.0, Color32::from_rgba_unmultiplied(255, 255, 255, a))
+            egui::Stroke::new(2.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, a))
         });
         let text_color = if inherited { p.text_inherited } else { p.text };
         // Keys with an Oryx LED color get a border in that color
@@ -1565,7 +1602,7 @@ fn draw_board(
             .as_deref()
             .and_then(parse_hex_color)
             .filter(|c| *c != Color32::BLACK)
-            .map(|c| egui::Stroke::new(1.5, c));
+            .map(|c| egui::Stroke::new(1.5_f32, c));
         if geom.rot_deg == 0.0 {
             let kr = Rect::from_min_max(corners[0], corners[2]);
             painter.rect_filled(kr, CornerRadius::same(4), base_fill);
@@ -1657,7 +1694,7 @@ fn draw_board(
         let start_x = cx - area_w / 2.0;
         painter.line_segment(
             [pos2(start_x, base_y), pos2(start_x + area_w, base_y)],
-            egui::Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 45)),
+            egui::Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 45)),
         );
         for s in 0..10 {
             let x = start_x + s as f32 * slot_w + if s >= 5 { mid_gap } else { 0.0 };
@@ -1688,7 +1725,7 @@ fn draw_board(
         painter.circle_stroke(
             center,
             radius,
-            egui::Stroke::new(1.2, Color32::from_rgba_unmultiplied(255, 255, 255, 60)),
+            egui::Stroke::new(1.2_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 60)),
         );
         // Map a smoothed ball vector to its dot position in the ring. Soft
         // response curve: moderate rolls already swing well out, full speed
@@ -1791,37 +1828,22 @@ fn action_text(a: &oryx::KeyAction) -> String {
     format!("{mods}{base}")
 }
 
-/// Opaque id of the window currently receiving keystrokes, for the typo
-/// tracker's "did the user switch apps?" guard. 0 on non-Windows.
-#[cfg(windows)]
+/// Opaque id of the window currently receiving keystrokes (frontmost app pid
+/// on macOS), for the typo tracker's "did the user switch apps?" guard.
 fn foreground_window() -> isize {
-    win32::foreground_window()
-}
-#[cfg(not(windows))]
-fn foreground_window() -> isize {
-    0
+    platform::foreground_window()
 }
 
-/// True when a Ctrl/Alt/Win modifier is held (so the keypress is a shortcut,
-/// not text). Always false on non-Windows.
-#[cfg(windows)]
+/// True when a Ctrl/Alt/Win (Cmd on macOS) modifier is held, so the keypress
+/// is a shortcut, not text.
 fn shortcut_mods_down() -> bool {
-    win32::ctrl_alt_gui_down()
-}
-#[cfg(not(windows))]
-fn shortcut_mods_down() -> bool {
-    false
+    platform::ctrl_alt_gui_down()
 }
 
 /// (cursor position, any mouse button down) for the typo tracker's "did the
-/// mouse move or click?" check. (None, false) off-Windows.
-#[cfg(windows)]
+/// mouse move or click?" check.
 fn pointer_state() -> (Option<(i32, i32)>, bool) {
-    (win32::cursor_pos(), win32::mouse_buttons_down())
-}
-#[cfg(not(windows))]
-fn pointer_state() -> (Option<(i32, i32)>, bool) {
-    (None, false)
+    (platform::cursor_pos(), platform::mouse_buttons_down())
 }
 
 /// Whether pointer activity since the last keystroke should void the typo
@@ -1849,6 +1871,18 @@ mod tests {
         assert!(pointer_invalidates(None, Some((5, 5)), true));
     }
 }
+
+// Per-platform helpers behind one facade: global input state polling (the
+// window is click-through, so real mouse events never reach it), monitor
+// lookup for drag clamping, and the native window-style asserts.
+#[cfg(windows)]
+use win32 as platform;
+
+#[cfg(target_os = "macos")]
+use macos as platform;
+
+#[cfg(not(any(windows, target_os = "macos")))]
+use fallback as platform;
 
 #[cfg(windows)]
 mod win32 {
@@ -1972,5 +2006,171 @@ mod win32 {
                 let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
             }
         }
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use objc2::MainThreadMarker;
+    use objc2::rc::Retained;
+    use objc2_app_kit::{
+        NSEvent, NSEventModifierFlags, NSScreen, NSView, NSWindow, NSWindowCollectionBehavior,
+        NSWorkspace,
+    };
+    use objc2_foundation::NSPoint;
+    use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+
+    /// NSStatusWindowLevel: above normal windows, and (with the
+    /// FullScreenAuxiliary collection behavior) above fullscreen apps too.
+    const OVERLAY_LEVEL: isize = 25;
+
+    fn ns_window(frame: &eframe::Frame) -> Option<Retained<NSWindow>> {
+        let RawWindowHandle::AppKit(h) = frame.window_handle().ok()?.as_raw() else {
+            return None;
+        };
+        // The view came from winit, which owns it for the frame's lifetime;
+        // update() runs on the main thread, where AppKit access is legal.
+        let view = unsafe { (h.ns_view.as_ptr() as *mut NSView).as_ref()? };
+        view.window()
+    }
+
+    pub fn shift_down() -> bool {
+        NSEvent::modifierFlags_class().contains(NSEventModifierFlags::Shift)
+    }
+
+    /// Pid of the frontmost app, for equality checks. The overlay never
+    /// activates (accessory app, non-activating panel), so this is the app
+    /// the user is actually typing into, never us.
+    pub fn foreground_window() -> isize {
+        let Some(app) = NSWorkspace::sharedWorkspace().frontmostApplication() else {
+            return 0;
+        };
+        app.processIdentifier() as isize
+    }
+
+    pub fn lbutton_down() -> bool {
+        NSEvent::pressedMouseButtons() & 1 != 0
+    }
+
+    /// True when any mouse button (left/right/middle) is currently held — a
+    /// click repositions the caret, invalidating the typo buffer.
+    pub fn mouse_buttons_down() -> bool {
+        NSEvent::pressedMouseButtons() & 0b111 != 0
+    }
+
+    /// True when any of Ctrl/Option/Cmd is held — i.e. the keypress is a
+    /// shortcut, not typed text. Shift is excluded: Shift+letter is still
+    /// text.
+    pub fn ctrl_alt_gui_down() -> bool {
+        NSEvent::modifierFlags_class().intersects(
+            NSEventModifierFlags::Control
+                | NSEventModifierFlags::Option
+                | NSEventModifierFlags::Command,
+        )
+    }
+
+    /// Cursor position in the same top-left-origin "physical" space as
+    /// [`crate::display::monitors`]: Cocoa's y-up global points, flipped
+    /// around the primary screen's top edge and scaled by the containing
+    /// screen's backing factor.
+    pub fn cursor_pos() -> Option<(i32, i32)> {
+        let mtm = MainThreadMarker::new()?;
+        let p = NSEvent::mouseLocation();
+        let screens = NSScreen::screens(mtm);
+        let primary_h = screens
+            .iter()
+            .map(|s| s.frame())
+            .find(|f| f.origin.x == 0.0 && f.origin.y == 0.0)
+            .map(|f| f.size.height)?;
+        let contains = |f: objc2_foundation::NSRect, p: NSPoint| {
+            p.x >= f.origin.x
+                && p.x < f.origin.x + f.size.width
+                && p.y >= f.origin.y
+                && p.y < f.origin.y + f.size.height
+        };
+        let scale = screens
+            .iter()
+            .find(|s| contains(s.frame(), p))
+            .or_else(|| screens.iter().next())
+            .map(|s| s.backingScaleFactor())
+            .unwrap_or(1.0);
+        Some(((p.x * scale) as i32, ((primary_h - p.y) * scale) as i32))
+    }
+
+    /// Full bounds of the monitor containing the given point (same physical
+    /// space as [`crate::display::monitors`]) — first monitor if it's in a
+    /// gap.
+    pub fn monitor_rect_for_point(x: i32, y: i32) -> Option<(i32, i32, i32, i32)> {
+        let mons = crate::display::monitors();
+        mons.iter()
+            .find(|m| x >= m.left && x < m.right && y >= m.top && y < m.bottom)
+            .or_else(|| mons.first())
+            .map(|m| (m.left, m.top, m.right, m.bottom))
+    }
+
+    /// The macOS equivalent of the Win32 style asserts: click-through via
+    /// ignoresMouseEvents (dropped only while the drag handle is armed), a
+    /// window level + collection behavior that keeps the overlay on every
+    /// Space and over fullscreen apps, no shadow, and window-level alpha
+    /// (composes with per-pixel alpha). Re-asserted every frame because winit
+    /// can rewrite window state on visibility changes.
+    pub fn assert_overlay_styles(
+        frame: &eframe::Frame,
+        click_through: bool,
+        alpha: u8,
+        force_alpha: bool,
+    ) {
+        let Some(win) = ns_window(frame) else { return };
+        if win.ignoresMouseEvents() != click_through {
+            win.setIgnoresMouseEvents(click_through);
+        }
+        let behavior = NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::FullScreenAuxiliary
+            | NSWindowCollectionBehavior::IgnoresCycle;
+        if win.collectionBehavior() != behavior {
+            win.setCollectionBehavior(behavior);
+        }
+        if win.level() != OVERLAY_LEVEL {
+            win.setLevel(OVERLAY_LEVEL);
+        }
+        if win.hasShadow() {
+            win.setHasShadow(false);
+        }
+        let want = alpha as f64 / 255.0;
+        if force_alpha || (win.alphaValue() - want).abs() > 0.5 / 255.0 {
+            win.setAlphaValue(want);
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+mod fallback {
+    pub fn shift_down() -> bool {
+        false
+    }
+    pub fn foreground_window() -> isize {
+        0
+    }
+    pub fn lbutton_down() -> bool {
+        false
+    }
+    pub fn mouse_buttons_down() -> bool {
+        false
+    }
+    pub fn ctrl_alt_gui_down() -> bool {
+        false
+    }
+    pub fn cursor_pos() -> Option<(i32, i32)> {
+        None
+    }
+    pub fn monitor_rect_for_point(_x: i32, _y: i32) -> Option<(i32, i32, i32, i32)> {
+        None
+    }
+    pub fn assert_overlay_styles(
+        _frame: &eframe::Frame,
+        _click_through: bool,
+        _alpha: u8,
+        _force_alpha: bool,
+    ) {
     }
 }

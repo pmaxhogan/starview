@@ -384,10 +384,9 @@ fn commas(n: u64) -> String {
     out
 }
 
-/// The starview data directory (%LOCALAPPDATA%\starview).
+/// The starview data directory.
 pub fn dir() -> Option<PathBuf> {
-    let base = std::env::var_os("LOCALAPPDATA")?;
-    Some(PathBuf::from(base).join("starview"))
+    crate::settings::data_dir()
 }
 
 fn path() -> Option<PathBuf> {

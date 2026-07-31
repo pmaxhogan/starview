@@ -1,9 +1,12 @@
 //! Auto-update from GitHub releases.
 //!
 //! A background thread checks `releases/latest` shortly after startup and
-//! daily after that. When a newer version exists, its installer is downloaded
-//! to a temp file and the tray menu's update item lights up; installing runs
-//! the Inno installer silently (it stops the app, swaps the exe, relaunches).
+//! daily after that. On Windows, a newer version's installer is downloaded to
+//! a temp file and the tray menu's update item lights up; installing runs the
+//! Inno installer silently (it stops the app, swaps the exe, relaunches). On
+//! macOS the check is notify-only: the update item lights up and clicking it
+//! opens the release page (no signed self-update path without a Developer
+//! ID).
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -13,6 +16,7 @@ use anyhow::{Context, Result};
 
 const REPO: &str = "pmaxhogan/starview";
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
+#[cfg(windows)]
 const INSTALLER_ASSET: &str = "starview-setup.exe";
 
 /// Downloaded-and-ready update, waiting for the user to click install.
@@ -66,21 +70,44 @@ pub fn check_now(on_done: impl FnOnce(Option<String>) + Send + 'static) {
         .expect("failed to spawn manual update checker");
 }
 
-/// Launches the downloaded installer (silent, relaunches the app) and returns
-/// true if it started; the caller should quit the app right after.
-pub fn install_ready_update() -> bool {
-    let Some((_, path)) = READY.lock().unwrap().clone() else {
-        return false;
+/// What clicking the tray's update item did. Quit is only constructed on
+/// Windows and Handled only on macOS; the tray matches all three either way.
+#[allow(dead_code)]
+pub enum InstallAction {
+    /// The installer is running; the caller should quit the app.
+    Quit,
+    /// The click was handled (e.g. release page opened); nothing more to do.
+    Handled,
+    /// No update is staged; the caller should run a manual check instead.
+    NotReady,
+}
+
+/// Acts on a staged update: Windows launches the downloaded installer
+/// (silent, relaunches the app); macOS opens the release page in the browser.
+pub fn install_ready_update() -> InstallAction {
+    let Some((_version, _path)) = READY.lock().unwrap().clone() else {
+        return InstallAction::NotReady;
     };
-    match std::process::Command::new(&path)
-        .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/RELAUNCH=1"])
-        .spawn()
+    #[cfg(windows)]
     {
-        Ok(_) => true,
-        Err(err) => {
-            eprintln!("failed to launch installer {}: {err}", path.display());
-            false
+        match std::process::Command::new(&_path)
+            .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/RELAUNCH=1"])
+            .spawn()
+        {
+            Ok(_) => InstallAction::Quit,
+            Err(err) => {
+                eprintln!("failed to launch installer {}: {err}", _path.display());
+                InstallAction::NotReady
+            }
         }
+    }
+    #[cfg(not(windows))]
+    {
+        let url = format!("https://github.com/{REPO}/releases/latest");
+        if let Err(err) = std::process::Command::new("open").arg(&url).spawn() {
+            eprintln!("failed to open {url}: {err}");
+        }
+        InstallAction::Handled
     }
 }
 
@@ -104,26 +131,37 @@ fn check_and_download() -> Result<Option<String>> {
     if !is_newer(latest, &current) {
         return Ok(None);
     }
-    let url = release["assets"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|a| a["name"].as_str() == Some(INSTALLER_ASSET))
-        .and_then(|a| a["browser_download_url"].as_str())
-        .with_context(|| format!("release {tag} has no {INSTALLER_ASSET} asset"))?;
 
-    let path = std::env::temp_dir().join(format!("starview-setup-{latest}.exe"));
-    let bytes = client
-        .get(url)
-        .send()?
-        .error_for_status()
-        .context("installer download failed")?
-        .bytes()?;
-    anyhow::ensure!(bytes.len() > 100_000, "installer download suspiciously small");
-    std::fs::write(&path, &bytes).context("failed writing installer to temp")?;
+    #[cfg(windows)]
+    {
+        let url = release["assets"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|a| a["name"].as_str() == Some(INSTALLER_ASSET))
+            .and_then(|a| a["browser_download_url"].as_str())
+            .with_context(|| format!("release {tag} has no {INSTALLER_ASSET} asset"))?;
 
-    eprintln!("update v{latest} downloaded to {}", path.display());
-    *READY.lock().unwrap() = Some((latest.to_owned(), path));
+        let path = std::env::temp_dir().join(format!("starview-setup-{latest}.exe"));
+        let bytes = client
+            .get(url)
+            .send()?
+            .error_for_status()
+            .context("installer download failed")?
+            .bytes()?;
+        anyhow::ensure!(bytes.len() > 100_000, "installer download suspiciously small");
+        std::fs::write(&path, &bytes).context("failed writing installer to temp")?;
+
+        eprintln!("update v{latest} downloaded to {}", path.display());
+        *READY.lock().unwrap() = Some((latest.to_owned(), path));
+    }
+    #[cfg(not(windows))]
+    {
+        // Notify-only: stage the version so the tray item lights up; clicking
+        // it opens the release page.
+        eprintln!("update v{latest} available: https://github.com/{REPO}/releases/latest");
+        *READY.lock().unwrap() = Some((latest.to_owned(), PathBuf::new()));
+    }
     Ok(Some(latest.to_owned()))
 }
 

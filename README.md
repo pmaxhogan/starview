@@ -5,8 +5,8 @@
 
 ---
 
-A tiny Windows overlay that shows which layer your ZSA keyboard is on — but only
-when you're *not* on the base layer. A semi-transparent panel appears in the
+A tiny Windows and macOS overlay that shows which layer your ZSA keyboard is
+on — but only when you're *not* on the base layer. A semi-transparent panel appears in the
 top-right corner rendering the active layer's full keymap (keycaps, labels,
 hold-action hints, live highlights on physically pressed keys), and disappears
 when you return to base. The layout re-syncs from Oryx every 5 minutes, so
@@ -17,6 +17,8 @@ Alt-Tab or on the taskbar, and it never steals focus.
 
 ## Install
 
+### Windows
+
 Grab `starview-setup.exe` from the
 [latest release](https://github.com/pmaxhogan/starview/releases/latest) and
 run it — per-user install (no admin), with an optional start-with-Windows
@@ -26,9 +28,27 @@ itself. The tray menu also shows the running version, and its "Up to date"
 item can be clicked to check for updates on demand. Or build from source:
 `cargo build --release`.
 
+### macOS (Apple Silicon)
+
+Grab `starview-macos.zip` from the
+[latest release](https://github.com/pmaxhogan/starview/releases/latest),
+unzip it, and drop `starview.app` in `/Applications`. The app is ad-hoc
+signed (no paid Apple Developer ID), so the first launch needs a
+right-click > Open, or `xattr -d com.apple.quarantine starview.app`. Or build
+from source (`cargo build --release`) and bundle with `scripts/make-app.sh`.
+
+starview lives in the menu bar (the dark disc with a blue dot) — no Dock
+icon, no Cmd-Tab entry. If macOS blocks HID access, starview opens the
+Privacy & Security > Input Monitoring pane; enable starview (or the terminal
+you launched it from) and relaunch. The update checker is notify-only on
+macOS: the menu-bar item lights up when a new release exists and clicking it
+opens the release page. A "Start at login" toggle appears in the menu when
+running from the .app bundle. Settings and stats live in
+`~/Library/Application Support/starview`.
+
 Releases are built by the `release` GitHub Actions workflow on `v*` tags
-(tag must match `Cargo.toml`'s version); each release carries the installer,
-a portable exe, and SHA256SUMS. Release notes and [`CHANGELOG.md`](CHANGELOG.md)
+(tag must match `Cargo.toml`'s version); each release carries the Windows
+installer, a portable exe, the macOS .app zip, and SHA256SUMS. Release notes and [`CHANGELOG.md`](CHANGELOG.md)
 are generated from the git history by [git-cliff](https://git-cliff.org), so the
 commits in each version are listed automatically — edit commit messages, not the
 changelog.
@@ -92,7 +112,8 @@ geometry come straight from your Oryx URL:
 events over raw HID but not its Oryx hash, so the layout can't be detected from
 the device itself — hence the remembered setting.) The layout must be public in
 Oryx. Layer names are fetched once at startup and cached in
-`%LOCALAPPDATA%\starview`, so it works offline after the first run. If the fetch
+`%LOCALAPPDATA%\starview` (macOS: `~/Library/Application Support/starview`),
+so it works offline after the first run. If the fetch
 fails entirely, the overlay falls back to layer numbers.
 
 The installer's "Start starview when Windows starts" task handles autostart
@@ -124,15 +145,18 @@ layer regardless of what the keyboard reports.
   0–35, right 36–71; rows top-to-bottom, then big-red, then piano keys —
   validated against a live layout). Labels compose from Oryx custom labels,
   a ~390-entry QMK keycode table, layer-switch targets ("MO 2"), and
-  modifier wrappers ("G+1", "C+Bksp"). Windows' Segoe UI Symbol is loaded as
-  a font fallback so arrows and symbol labels render. Thumb-cluster keys are
+  modifier wrappers ("G+1", "C+Bksp"). The system symbol font (Segoe UI
+  Symbol / Apple Symbols) is loaded as a font fallback so arrows and symbol
+  labels render. Thumb-cluster keys are
   drawn as actually-rotated polygons with rotated labels. Keydown/keyup HID
   events (matrix positions, mapped through the same keyboard.json table)
   highlight physically held keys while the overlay is visible.
 - **Trackball indicator** (`src/trackball.rs`): the ZSA Navigator presents as
   a HID mouse on the keyboard's USB composite device, so a Raw Input
   message-only window (`RIDEV_INPUTSINK`) watches per-device mouse deltas,
-  filtered to ZSA's vendor id (other mice are ignored). A ring between the
+  filtered to ZSA's vendor id (other mice are ignored); on macOS the same
+  pointer interface is read directly via hidapi (non-seizing, so the cursor
+  keeps working — this is the part that needs Input Monitoring). A ring between the
   thumb clusters shows a dot that deflects with ball motion and glides back
   to center; it appears after the first motion from a ZSA pointing device.
 - **Overlay window** (`src/overlay.rs`): eframe/egui with the **glow** renderer
@@ -143,7 +167,10 @@ layer regardless of what the keyboard reports.
   changes, so they're re-asserted on every update tick rather than set once.
   The window itself stays permanently visible; "hidden" just means nothing is
   drawn (a truly hidden window stops presenting, so its stale last frame
-  would flash on re-show).
+  would flash on re-show). On macOS the same ghost is NSWindow state instead:
+  `ignoresMouseEvents`, a status window level, and a collection behavior that
+  joins every Space (including over fullscreen apps), with the app running as
+  an accessory (menu-bar-only) process.
 
 ## Roadmap
 

@@ -54,6 +54,10 @@ fn pump(on_event: &mut impl FnMut(HidEvent)) {
             }
         }
     };
+    // Belt-and-suspenders with the `macos-shared-device` feature: never seize
+    // the device from the OS (exclusive opens freeze the trackball cursor).
+    #[cfg(target_os = "macos")]
+    api.set_open_exclusive(false);
     loop {
         let _ = api.refresh_devices();
         match open_keyboard(&api) {
@@ -74,7 +78,24 @@ fn open_keyboard(api: &HidApi) -> Option<HidDevice> {
     let info = api.device_list().find(|d| {
         d.vendor_id() == ZSA_VID && d.usage_page() == RAW_USAGE_PAGE && d.usage() == RAW_USAGE
     })?;
-    info.open_device(api).ok()
+    match info.open_device(api) {
+        Ok(dev) => Some(dev),
+        Err(err) => {
+            log_open_failure_once(&err.to_string());
+            None
+        }
+    }
+}
+
+/// The reconnect loop retries every couple of seconds; log the first failure
+/// (and run the macOS permission flow) instead of spamming stderr forever.
+fn log_open_failure_once(msg: &str) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    if !LOGGED.swap(true, Ordering::SeqCst) {
+        eprintln!("could not open the ZSA keyboard's raw HID interface: {msg}");
+    }
+    crate::perms::handle_hid_open_failure(msg);
 }
 
 fn pair(dev: &HidDevice) -> bool {
@@ -86,6 +107,7 @@ fn pair(dev: &HidDevice) -> bool {
 
 /// Reads events until the device errors out (unplug, reset, suspend).
 fn listen(dev: &HidDevice, on_event: &mut impl FnMut(HidEvent)) {
+    let debug = std::env::var_os("STARVIEW_HID_DEBUG").is_some();
     if !pair(dev) {
         return;
     }
@@ -105,11 +127,17 @@ fn listen(dev: &HidDevice, on_event: &mut impl FnMut(HidEvent)) {
                 }
             }
             Ok(_) => match buf[0] {
-                EVT_LAYER => on_event(HidEvent::Layer(buf[1])),
+                EVT_LAYER => {
+                    if debug {
+                        eprintln!("hid: layer {}", buf[1]);
+                    }
+                    on_event(HidEvent::Layer(buf[1]));
+                }
                 // Firmware sends [evt, col, row, ...] for key events.
                 EVT_KEYDOWN => on_event(HidEvent::KeyDown { row: buf[2], col: buf[1] }),
                 EVT_KEYUP => on_event(HidEvent::KeyUp { row: buf[2], col: buf[1] }),
-                EVT_PAIRING_SUCCESS => {} // a layer event follows immediately
+                // A layer event follows immediately.
+                EVT_PAIRING_SUCCESS => eprintln!("hid: paired with ZSA keyboard"),
                 EVT_ERROR => eprintln!("oryx error frame: {:02x?}", &buf[..4]),
                 _ => {} // RGB/status-LED and other events — ignore
             },

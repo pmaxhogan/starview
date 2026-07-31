@@ -2,35 +2,41 @@
 
 mod display;
 mod geometry;
-#[cfg(windows)]
 mod hdr;
 mod hid;
 mod keycodes;
 mod oryx;
 mod overlay;
+mod perms;
 mod settings;
 mod stats;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod trackball;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod tray;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod updater;
 
 use eframe::egui;
 
 /// egui's default fonts have no plain-arrow glyphs (←↑→↓) and miss most of
-/// the symbols people put in Oryx custom labels. Append Windows' Segoe UI
-/// Symbol as a fallback so those render instead of tofu.
+/// the symbols people put in Oryx custom labels. Append the system symbol
+/// font (Segoe UI Symbol / Apple Symbols) as a fallback so those render
+/// instead of tofu.
 fn install_symbol_font(ctx: &egui::Context) {
+    #[cfg(windows)]
     let path = r"C:\Windows\Fonts\seguisym.ttf";
+    #[cfg(target_os = "macos")]
+    let path = "/System/Library/Fonts/Apple Symbols.ttf";
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let path = "/usr/share/fonts/noto/NotoSansSymbols-Regular.ttf";
     let Ok(bytes) = std::fs::read(path) else {
         eprintln!("symbol font not found at {path}; arrows may not render");
         return;
     };
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
-        "segoe-ui-symbol".to_owned(),
+        "system-symbols".to_owned(),
         std::sync::Arc::new(egui::FontData::from_owned(bytes)),
     );
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
@@ -38,7 +44,7 @@ fn install_symbol_font(ctx: &egui::Context) {
             .families
             .entry(family)
             .or_default()
-            .push("segoe-ui-symbol".to_owned());
+            .push("system-symbols".to_owned());
     }
     ctx.set_fonts(fonts);
 }
@@ -99,6 +105,13 @@ fn main() -> eframe::Result {
             .with_resizable(false),
         // wgpu (the default) can't do transparent windows on Windows; glow can.
         renderer: eframe::Renderer::Glow,
+        // Accessory app on macOS: no Dock icon, no Cmd-Tab entry — the ghost
+        // overlay only ever surfaces through the menu-bar (tray) icon.
+        #[cfg(target_os = "macos")]
+        event_loop_builder: Some(Box::new(|builder| {
+            use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+            builder.with_activation_policy(ActivationPolicy::Accessory);
+        })),
         ..Default::default()
     };
 
@@ -116,7 +129,7 @@ fn main() -> eframe::Result {
                 ctx.request_repaint();
             });
 
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             {
                 let ctx = cc.egui_ctx.clone();
                 let ball_tx = tx.clone();
@@ -124,23 +137,35 @@ fn main() -> eframe::Result {
                     let _ = ball_tx.send(overlay::AppEvent::Trackball(dx, dy));
                     ctx.request_repaint();
                 });
+            }
 
+            #[cfg(windows)]
+            {
                 let ctx = cc.egui_ctx.clone();
                 let tray_tx = tx.clone();
                 tray::spawn(cfg.clone(), move |event| {
-                    let _ = tray_tx.send(match event {
-                        tray::TrayEvent::Settings(s) => overlay::AppEvent::Settings(s),
-                        tray::TrayEvent::ResetStats => overlay::AppEvent::ResetStats,
-                        tray::TrayEvent::ExportStats => overlay::AppEvent::ExportStats,
-                        tray::TrayEvent::ToggleOverlay => overlay::AppEvent::ToggleOverlay,
-                        tray::TrayEvent::Quit => overlay::AppEvent::Quit,
-                    });
+                    let _ = tray_tx.send(overlay::AppEvent::from_tray(event));
                     ctx.request_repaint();
                 });
 
                 updater::spawn_checker(tray::notify_update);
                 hdr::spawn_monitor();
             }
+
+            #[cfg(target_os = "macos")]
+            let mac_tray = {
+                // The tray must be created on the main thread (we're on it
+                // here, inside app creation); the app polls it every frame.
+                let ctx = cc.egui_ctx.clone();
+                updater::spawn_checker(move |version| {
+                    tray::notify_update(version);
+                    // The tray is polled on repaints; make one happen.
+                    ctx.request_repaint();
+                });
+                tray::init(&cfg)
+            };
+            #[cfg(target_os = "macos")]
+            let mac_tx = tx.clone();
 
             // Periodic Oryx re-fetch so layout edits show up without a restart.
             let ctx = cc.egui_ctx.clone();
@@ -160,7 +185,13 @@ fn main() -> eframe::Result {
                 })
                 .expect("failed to spawn oryx refresh thread");
 
-            Ok(Box::new(overlay::OverlayApp::new(rx, layout, cfg, stats)))
+            #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+            let mut app = overlay::OverlayApp::new(rx, layout, cfg, stats);
+            #[cfg(target_os = "macos")]
+            if let Some(tray) = mac_tray {
+                app.set_mac_tray(tray, mac_tx);
+            }
+            Ok(Box::new(app))
         }),
     )
 }

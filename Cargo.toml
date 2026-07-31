@@ -11,12 +11,42 @@ winresource = "0.1"
 
 [dependencies]
 anyhow = "1"
-hidapi = "2"
+# macos-shared-device: open HID devices non-exclusively on macOS — the
+# default (exclusive/seize) steals the pointer interface from the OS, freezing
+# the trackball's cursor while starview runs.
+hidapi = { version = "2", features = ["macos-shared-device"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls", "gzip"], default-features = false }
 # default-features = false drops wgpu; glow is required for transparency on Windows
 eframe = { version = "0.34.3", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
 raw-window-handle = "0.6"
-windows = { version = "0.62.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_UI_Input", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_System_SystemInformation"] }
 tray-icon = "0.24.1"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_UI_Input", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_System_SystemInformation"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Same objc2 generation winit 0.30 uses, so the tree carries one copy.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSGeometry"] }
+objc2-app-kit = { version = "0.3", features = [
+    "NSApplication",
+    "NSEvent",
+    "NSGraphics",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSScreen",
+    "NSView",
+    "NSWindow",
+    "NSWorkspace",
+] }
+# Start-at-login via the modern Login Items API (needs a .app bundle).
+objc2-service-management = { version = "0.3", features = ["SMAppService"] }
+# Global Ctrl+Alt+O toggle (Carbon hotkey - no accessibility permission).
+global-hotkey = "0.7"
+# Local dates for the per-day stats buckets.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# The accessory activation policy hook needs winit's macOS extension trait;
+# version pinned to what eframe 0.34 already resolves.
+winit = { version = "0.30", default-features = false }

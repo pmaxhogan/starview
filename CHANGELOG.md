@@ -3,6 +3,12 @@
 All notable changes to starview, newest first. Generated from the git history
 by [git-cliff](https://git-cliff.org) — edit commit messages, not this file.
 
+## [v0.19.0](https://github.com/pmaxhogan/starview/releases/tag/v0.19.0) — 2026-07-31
+
+### Changed
+
+- Port starview to macOS
+
 ## [v0.18.2](https://github.com/pmaxhogan/starview/releases/tag/v0.18.2) — 2026-06-18
 
 ### Added
